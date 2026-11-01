@@ -1,4 +1,4 @@
-"""add group_role_mappings table for centralized IdP group → WAF++ role resolution
+"""add group_role_mappings table for centralized IdP group → Wombat role resolution
 
 Revision ID: 0014
 Revises: 0013

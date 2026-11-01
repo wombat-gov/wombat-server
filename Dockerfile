@@ -7,39 +7,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 
 RUN pip install --no-cache-dir hatchling build
 
-# Install wafpass-core from the local sibling package (pass/).
-# This must happen before wafpass-server is installed so that
-# `from wafpass.control_schema import WizardControl` resolves correctly.
-COPY pass/ /tmp/wafpass-core/
-RUN pip install --no-cache-dir /tmp/wafpass-core && rm -rf /tmp/wafpass-core
+# Install wombat-core from the local sibling package (pass/).
+# This must happen before wombat-server is installed so that
+# `from wombat.control_schema import WizardControl` resolves correctly.
+COPY pass/ /tmp/wombat-core/
+RUN pip install --no-cache-dir /tmp/wombat-core && rm -rf /tmp/wombat-core
 
 COPY wafpass-server/pyproject.toml wafpass-server/VERSION wafpass-server/README.md ./
-COPY wafpass-server/wafpass_server/ wafpass_server/
+COPY wafpass-server/wombat_server/ wombat_server/
 COPY wafpass-server/alembic/ alembic/
 COPY wafpass-server/alembic.ini wafpass-server/entrypoint.sh ./
 
 RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
 
-# Copy WAF++ control YAML files so the sandbox engine can find them.
-# The pass/ directory was already used to install wafpass-core above, but the
+# Copy Wombat control YAML files so the sandbox engine can find them.
+# The pass/ directory was already used to install wombat-core above, but the
 # controls/ subdirectory is data (not Python code) and is not installed by pip.
 COPY pass/controls/ /app/controls/
 
-# Copy WAF++ regulatory logo assets so the PDF reporter can render framework badges.
+# Copy Wombat regulatory logo assets so the PDF reporter can render framework badges.
 COPY pass/assets/ /app/assets/
 
-# Copy WAF++ framework repository for update checking
+# Copy Wombat framework repository for update checking
 COPY framework/ /app/framework/
 
-# Default controls path — override with WAFPASS_CONTROLS_DIR if you mount your
+# Default controls path — override with WOMBAT_CONTROLS_DIR if you mount your
 # own controls volume (e.g. for custom/enterprise controls).
-ENV WAFPASS_CONTROLS_DIR=/app/controls
+ENV WOMBAT_CONTROLS_DIR=/app/controls
 
 # Framework path for update checking
-ENV WAFPASS_FRAMEWORK_DIR=/app/framework
+ENV WOMBAT_FRAMEWORK_DIR=/app/framework
 
 # Asset path used by the PDF reporter for regulatory logos
-ENV WAFPASS_ASSETS_DIR=/app/assets
+ENV WOMBAT_ASSETS_DIR=/app/assets
 
 EXPOSE 8000
 

@@ -10,12 +10,12 @@ They require a real, reachable Postgres *server* (not a specific database —
 each test creates and drops its own) and are skipped automatically,
 module-wide, when none is configured. CI has no Postgres service today, so
 this keeps the existing suite green there without one; set
-WAFPASS_TEST_DATABASE_URL to actually run them, locally or in a future CI
+WOMBAT_TEST_DATABASE_URL to actually run them, locally or in a future CI
 job with a Postgres service container:
 
-    docker run -d --rm --name wafpass-pg-test \\
+    docker run -d --rm --name wombat-pg-test \\
         -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:16-alpine
-    export WAFPASS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/postgres
+    export WOMBAT_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:55432/postgres
     pytest tests/test_mandants.py
 
 Each test function gets its own freshly-migrated, uniquely-named database
@@ -27,9 +27,9 @@ from __future__ import annotations
 
 import os
 
-# Must be set before any `wafpass_server.*` import below triggers
+# Must be set before any `wombat_server.*` import below triggers
 # Settings() validation — see config.py, which rejects its own default.
-os.environ.setdefault("WAFPASS_JWT_SECRET", "test-only-secret-not-for-any-real-deployment-at-all")
+os.environ.setdefault("WOMBAT_JWT_SECRET", "test-only-secret-not-for-any-real-deployment-at-all")
 
 import asyncio
 import uuid
@@ -46,12 +46,12 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_APP_ROLE = "wafpass_app"
-_APP_PASSWORD = "wafpass_app_test_password"
+_APP_ROLE = "wombat_app"
+_APP_PASSWORD = "wombat_app_test_password"
 
 
 def _server_dsn() -> str | None:
-    return os.environ.get("WAFPASS_TEST_DATABASE_URL")
+    return os.environ.get("WOMBAT_TEST_DATABASE_URL")
 
 
 async def _run_migrations(database_async_url: str) -> None:
@@ -80,10 +80,10 @@ async def _run_migrations(database_async_url: str) -> None:
 
 
 async def _ensure_app_role(owner_dsn: asyncpg.Connection, db_name: str) -> None:
-    """Idempotently (re)create wafpass_app and grant it access to *db_name*.
+    """Idempotently (re)create wombat_app and grant it access to *db_name*.
 
     Same approach as entrypoint.sh's ensure_runtime_role() and
-    db-init/02-wafpass-app-role.sql — duplicated here (not imported) since
+    db-init/02-wombat-app-role.sql — duplicated here (not imported) since
     entrypoint.sh is a standalone shell+heredoc script, not an importable
     module, and the SQL itself is only a handful of idempotent statements.
     """
@@ -109,7 +109,7 @@ class MandantTestDb:
     superuser (bypasses RLS, same role Alembic and the activation endpoint
     use) — for seeding fixture data and asserting on raw state.
     ``app_engine``/``app_sessionmaker`` connect as the non-superuser
-    ``wafpass_app`` role — the one RLS is actually enforced against,
+    ``wombat_app`` role — the one RLS is actually enforced against,
     exactly like ordinary runtime traffic.
     """
     owner_engine: AsyncEngine
@@ -126,13 +126,13 @@ async def mandant_db() -> AsyncGenerator[MandantTestDb, None]:
     server_dsn = _server_dsn()
     if not server_dsn:
         pytest.skip(
-            "Set WAFPASS_TEST_DATABASE_URL to a reachable Postgres server "
+            "Set WOMBAT_TEST_DATABASE_URL to a reachable Postgres server "
             "(e.g. postgresql://postgres:postgres@localhost:55432/postgres) "
             "to run the multi-mandant integration suite. See tests/conftest.py."
         )
 
     server_url = make_url(server_dsn)
-    db_name = f"wafpass_test_{uuid.uuid4().hex[:16]}"
+    db_name = f"wombat_test_{uuid.uuid4().hex[:16]}"
 
     maintenance_db = server_url.database or "postgres"
     admin_conn = await asyncpg.connect(
@@ -197,7 +197,7 @@ async def mandant_db() -> AsyncGenerator[MandantTestDb, None]:
 
 @pytest_asyncio.fixture
 async def app_client(mandant_db: MandantTestDb):
-    """An httpx client against the real FastAPI app (wafpass_server.main:app),
+    """An httpx client against the real FastAPI app (wombat_server.main:app),
     with its two database entry points redirected to this test's isolated
     database instead of whatever `settings.*_database_url` happens to
     default to.
@@ -210,7 +210,7 @@ async def app_client(mandant_db: MandantTestDb):
     - `get_owner_connection` is used differently: `admin.py` calls it
       directly inside the handler body (`async with get_owner_connection()
       as conn:`), not through `Depends()`, so `dependency_overrides` cannot
-      intercept it at all. Pre-seeding `wafpass_server.database._owner_engine`
+      intercept it at all. Pre-seeding `wombat_server.database._owner_engine`
       with our own engine works instead: `_get_owner_engine()`'s lazy-init
       (`if _owner_engine is None: ...`) then never fires, and the
       unmodified `get_owner_connection()` uses our engine without any
@@ -218,9 +218,9 @@ async def app_client(mandant_db: MandantTestDb):
     """
     import httpx
 
-    from wafpass_server import database as _database
-    from wafpass_server.database import get_db
-    from wafpass_server.main import app
+    from wombat_server import database as _database
+    from wombat_server.database import get_db
+    from wombat_server.main import app
 
     async def _override_get_db():
         async with mandant_db.app_sessionmaker() as session:

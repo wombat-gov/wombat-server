@@ -37,17 +37,17 @@ def fake_control_result():
 
 
 def test_build_demo_result_shape(fake_control_result):
-    """_build_demo_result should return a valid wafpass-result schema."""
-    from wafpass_server.routers.sandbox import _build_demo_result
+    """_build_demo_result should return a valid wombat-result schema."""
+    from wombat_server.routers.sandbox import _build_demo_result
 
     result = _build_demo_result(
         raw_results=[fake_control_result],
         controls=[fake_control_result.control],
         scan_dir="/tmp/demo-scan",
-        bucket_name="wafpass-demo-test",
+        bucket_name="wombat-demo-test",
     )
 
-    assert result.project == "wafpass-demo"
+    assert result.project == "wombat-demo"
     assert result.branch == "main"
     assert result.stage == "demo"
     assert result.iac_framework == "terraform"

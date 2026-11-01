@@ -1,10 +1,10 @@
-# wafpass-server
+# wombat-server
 
-REST API for persisting and querying WAF++ PASS scan results. Part of the [WAF++ framework](https://waf2p.dev) monorepo.
+REST API for persisting and querying WOMBATpass scan results. Part of the [Wombat framework](https://www.wombat-gov.dev) monorepo.
 
 | Component | Role |
 |-----------|------|
-| `pass/` · `wafpass-core` | Compliance engine, CLI, IaC parsers ← produces results |
+| `pass/` · `wombat-core` | Compliance engine, CLI, IaC parsers ← produces results |
 | `wafpass-server/` · **this package** | FastAPI + PostgreSQL · stores results, exposes APIs |
 | `wafpass-dashboard/` · React SPA | Consumes this API · visualises compliance posture |
 
@@ -44,7 +44,7 @@ export $(grep -v '^#' .env | xargs)
 alembic upgrade head
 
 # Start server with auto-reload
-uvicorn wafpass_server.main:app --reload --port 8000
+uvicorn wombat_server.main:app --reload --port 8000
 ```
 
 ---
@@ -56,18 +56,18 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL async DSN, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
-| `WAFPASS_ENV` | `local` | Environment tag (`local`, `staging`, `production`) |
+| `WOMBAT_ENV` | `local` | Environment tag (`local`, `staging`, `production`) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed CORS origins |
-| `WAFPASS_CONTROLS_DIR` | `controls` | Path to WAF++ control YAML files (used by Sandbox endpoint) |
-| `WAFPASS_JWT_SECRET` | `change-me-…` | HS256 signing key for access tokens. **Required in non-local environments** — the server refuses to start with the default value when `WAFPASS_ENV != local`. Generate with `openssl rand -hex 32`. |
-| `WAFPASS_JWT_EXPIRE_MINUTES` | `60` | Access token lifetime in minutes |
-| `WAFPASS_JWT_REFRESH_DAYS` | `7` | Refresh token lifetime in days |
-| `WAFPASS_ENCRYPTION_KEY` | *(empty)* | At-rest encryption key for SSO secrets (OIDC client secret, SAML2 private key). Fernet-compatible 32-byte base64 key or any passphrase (PBKDF2-derived). **Required in non-local environments** — without it the server derives the key from `WAFPASS_JWT_SECRET`, which is insecure. Generate with `openssl rand -base64 32`. |
-| `WAFPASS_SECRETS_BACKEND` | `local` | Encryption backend for SSO secrets: `local` (Fernet AES), `aws_sm` (AWS Secrets Manager), `vault_transit` (HashiCorp Vault Transit) |
-| `WAFPASS_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin user (seeded once on first startup) |
-| `WAFPASS_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
-| `WAFPASS_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
-| `WAFPASS_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /api/v1/runs` / `POST /api/v1/scan` |
+| `WOMBAT_CONTROLS_DIR` | `controls` | Path to Wombat control YAML files (used by Sandbox endpoint) |
+| `WOMBAT_JWT_SECRET` | `change-me-…` | HS256 signing key for access tokens. **Required in non-local environments** — the server refuses to start with the default value when `WOMBAT_ENV != local`. Generate with `openssl rand -hex 32`. |
+| `WOMBAT_JWT_EXPIRE_MINUTES` | `60` | Access token lifetime in minutes |
+| `WOMBAT_JWT_REFRESH_DAYS` | `7` | Refresh token lifetime in days |
+| `WOMBAT_ENCRYPTION_KEY` | *(empty)* | At-rest encryption key for SSO secrets (OIDC client secret, SAML2 private key). Fernet-compatible 32-byte base64 key or any passphrase (PBKDF2-derived). **Required in non-local environments** — without it the server derives the key from `WOMBAT_JWT_SECRET`, which is insecure. Generate with `openssl rand -base64 32`. |
+| `WOMBAT_SECRETS_BACKEND` | `local` | Encryption backend for SSO secrets: `local` (Fernet AES), `aws_sm` (AWS Secrets Manager), `vault_transit` (HashiCorp Vault Transit) |
+| `WOMBAT_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin user (seeded once on first startup) |
+| `WOMBAT_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
+| `WOMBAT_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
+| `WOMBAT_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /api/v1/runs` / `POST /api/v1/scan` |
 
 > **Local dev tip:** When running the dashboard dev server alongside the API, add `http://localhost:5173` to `CORS_ORIGINS` so Vite's dev server can reach the API without CORS errors.
 
@@ -81,9 +81,9 @@ All API endpoints under `/api/v1` require a valid Bearer JWT except `POST /api/v
 
 ```bash
 # 1. Set admin credentials in .env (first-run only — auto-seeds one user)
-WAFPASS_ADMIN_USERNAME=admin
-WAFPASS_ADMIN_PASSWORD=changeme123
-WAFPASS_ADMIN_ROLE=admin
+WOMBAT_ADMIN_USERNAME=admin
+WOMBAT_ADMIN_PASSWORD=changeme123
+WOMBAT_ADMIN_ROLE=admin
 
 # 2. Obtain a token
 TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
@@ -106,7 +106,7 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
    - Verifies the state JWT (CSRF protection).
    - Fetches the IdP's public JWKS from `jwks_uri` and verifies the `id_token` signature (RS256/EC).
    - Validates the `aud` claim equals `client_id` and the `nonce` claim matches the state JWT.
-   - Provisions the user and issues a WAF++ JWT, then redirects to the dashboard.
+   - Provisions the user and issues a Wombat JWT, then redirects to the dashboard.
 
 **SAML2 flow:**
 1. Admin configures SP/IdP entity IDs, ACS URL, IdP certificate, and role mapping.
@@ -114,14 +114,14 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
 3. `GET /api/v1/auth/saml/login` initiates the SP-initiated SSO redirect.
 4. `POST /api/v1/auth/saml/acs` validates the assertion, provisions the user, issues a JWT, and redirects.
 
-> SAML2 requires the optional `python3-saml` system dependency: `pip install "wafpass-server[saml]"` (also needs `libxmlsec1` on the host).
+> SAML2 requires the optional `python3-saml` system dependency: `pip install "wombat-server[saml]"` (also needs `libxmlsec1` on the host).
 
 ### CI/CD (no user account needed)
 
-Set `WAFPASS_API_KEY=some-secret` on the server and pass it as a header:
+Set `WOMBAT_API_KEY=some-secret` on the server and pass it as a header:
 
 ```bash
-wafpass check ./infra --output json | \
+wombat check ./infra --output json | \
   curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -H "X-Api-Key: some-secret" \
@@ -131,7 +131,7 @@ wafpass check ./infra --output json | \
 To enable dashboard Local preview / auto-fix diffs, add `--upload-source`:
 
 ```bash
-wafpass check ./infra --output json --upload-source | \
+wombat check ./infra --output json --upload-source | \
   curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -H "X-Api-Key: some-secret" \
@@ -191,11 +191,11 @@ wafpass check ./infra --output json --upload-source | \
 
 ### Runs
 
-Ingest and retrieve compliance scan results produced by `wafpass check --output json`.
+Ingest and retrieve compliance scan results produced by `wombat check --output json`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/runs` | Ingest a `wafpass-result.json` payload |
+| `POST` | `/api/v1/runs` | Ingest a `wombat-result.json` payload |
 | `GET` | `/api/v1/runs` | List runs (`limit`, `offset`, `project`) |
 | `GET` | `/api/v1/runs/{id}` | Full run with findings, controls metadata, secret findings |
 | `GET` | `/api/v1/runs/{id}/controls` | Controls metadata for a run |
@@ -204,7 +204,7 @@ Ingest and retrieve compliance scan results produced by `wafpass check --output 
 **Push a result from CI:**
 
 ```bash
-wafpass check ./infra --output json | \
+wombat check ./infra --output json | \
   curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -d @-
@@ -213,7 +213,7 @@ wafpass check ./infra --output json | \
 **Push a result with source snapshots (required for dashboard Local preview diffs):**
 
 ```bash
-wafpass check ./infra --output json --upload-source | \
+wombat check ./infra --output json --upload-source | \
   curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -d @-
@@ -224,14 +224,14 @@ wafpass check ./infra --output json --upload-source | \
 ```python
 import json, httpx
 
-result = json.loads(open("wafpass-result.json").read())
+result = json.loads(open("wombat-result.json").read())
 result.update({"project": "my-infra", "branch": "main", "git_sha": "abc1234"})
 httpx.post("http://localhost:8000/api/v1/runs", json=result)
 ```
 
 ### Controls catalogue
 
-Browse and manage WAF++ controls independently of scan runs.
+Browse and manage Wombat controls independently of scan runs.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -286,7 +286,7 @@ Formally accepted residual risks with approver sign-off, RFC, and traceability l
 
 ### Architect Sandbox
 
-Run the real WAF++ engine against arbitrary IaC snippets in-process. The sandbox currently evaluates HCL snippets; pass `"iac": "terraform"` (or another supported framework identifier) to select the parser. Requires `wafpass-core` and a populated `WAFPASS_CONTROLS_DIR`.
+Run the real Wombat engine against arbitrary IaC snippets in-process. The sandbox currently evaluates HCL snippets; pass `"iac": "terraform"` (or another supported framework identifier) to select the parser. Requires `wombat-core` and a populated `WOMBAT_CONTROLS_DIR`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -303,7 +303,7 @@ curl -X POST http://localhost:8000/api/v1/sandbox \
   -d '{"hcl": "resource \"aws_s3_bucket\" \"b\" {}", "iac": "terraform"}'
 ```
 
-Without `wafpass-core`, the server starts normally and all other endpoints remain available. Sandbox returns `503` with a descriptive message.
+Without `wombat-core`, the server starts normally and all other endpoints remain available. Sandbox returns `503` with a descriptive message.
 
 ### Evidence Locker
 
@@ -322,7 +322,7 @@ Cryptographically-locked, immutable audit packages. Locking freezes a run snapsh
 | `GET` | `/api/v1/evidence/p/{token}/qr.svg` | None | Public QR code (for PDF embedding) |
 | `GET` | `/api/v1/evidence/p/{token}/meta` | None | Public metadata (used by CLI) |
 
-Each locked package includes: title, prepared-by, organization, audit period, regulatory frameworks, SHA-256 hash digest, a public token, and the locking user. The `WAFPASS_PUBLIC_URL` env var controls the base URL embedded in QR codes (defaults to the incoming request's scheme + host).
+Each locked package includes: title, prepared-by, organization, audit period, regulatory frameworks, SHA-256 hash digest, a public token, and the locking user. The `WOMBAT_PUBLIC_URL` env var controls the base URL embedded in QR codes (defaults to the incoming request's scheme + host).
 
 ### Achievements
 
@@ -374,7 +374,7 @@ Shields.io-style SVG badges for READMEs and external dashboards. Live badges ref
 Embed a live badge in your README:
 
 ```markdown
-![WAF++ PASS](https://wafpass.example.com/public/badge/my-project.svg)
+![WOMBATpass](https://wombat.example.com/public/badge/my-project.svg)
 ```
 
 For air-gapped environments: download via `/download` and commit the SVG.
@@ -459,7 +459,7 @@ Response:
 
 Embed the badge in your README or dashboard:
 ```markdown
-![WAF++ PASS](https://your-server.com/widget/p/abc123xyz.svg)
+![WOMBATpass](https://your-server.com/widget/p/abc123xyz.svg)
 ```
 
 ---
@@ -504,18 +504,18 @@ alembic current                                # show applied revision
 
 ## Docker
 
-The build context is the **monorepo root** because the Dockerfile copies `pass/` first to install `wafpass-core`:
+The build context is the **monorepo root** because the Dockerfile copies `pass/` first to install `wombat-core`:
 
 ```bash
 # From repo root
-docker build -t wafpass-server -f wafpass-server/Dockerfile .
+docker build -t wombat-server -f wafpass-server/Dockerfile .
 
 docker run \
-  -e DATABASE_URL=postgresql+asyncpg://wafpass:wafpass@host.docker.internal/wafpass \
+  -e DATABASE_URL=postgresql+asyncpg://wombat:wombat@host.docker.internal/wombat \
   -e CORS_ORIGINS=http://localhost:3000 \
-  -e WAFPASS_CONTROLS_DIR=/app/controls \
+  -e WOMBAT_CONTROLS_DIR=/app/controls \
   -p 8000:8000 \
-  wafpass-server
+  wombat-server
 ```
 
 The entrypoint (`entrypoint.sh`) runs `alembic upgrade head` automatically before starting uvicorn — no manual migration step needed in production.
@@ -523,11 +523,11 @@ The entrypoint (`entrypoint.sh`) runs `alembic upgrade head` automatically befor
 **Custom controls directory:**
 
 ```yaml
-# docker-compose.yml — wafpass-server service
+# docker-compose.yml — wombat-server service
 volumes:
   - ./my-controls:/app/controls:ro
 environment:
-  WAFPASS_CONTROLS_DIR: /app/controls
+  WOMBAT_CONTROLS_DIR: /app/controls
 ```
 
 ---

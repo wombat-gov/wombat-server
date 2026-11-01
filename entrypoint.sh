@@ -20,15 +20,15 @@ if not url:
 
 
 async def ensure_runtime_role() -> None:
-    """Idempotently (re)create the non-superuser wafpass_app role and its
+    """Idempotently (re)create the non-superuser wombat_app role and its
     grants, on every startup — not just on a brand-new Postgres volume.
 
-    docker-entrypoint-initdb.d scripts (db-init/02-wafpass-app-role.sql)
+    docker-entrypoint-initdb.d scripts (db-init/02-wombat-app-role.sql)
     only ever run once, against a *fresh* data volume. Any existing
     deployment upgrading through this change has an already-initialized
     volume that script never touches, so the role would otherwise simply
     not exist — the app fails to start with "password authentication
-    failed for user wafpass_app", not because of a wrong password but
+    failed for user wombat_app", not because of a wrong password but
     because the role was never created. Found exactly this way against a
     real running deployment; fixed here so it can't recur on any upgrade,
     not just patched once by hand. See decisions/adrs/ADR-003-multi-mandant-tenancy.md
@@ -36,7 +36,7 @@ async def ensure_runtime_role() -> None:
     """
     runtime_url = os.environ.get("RUNTIME_DATABASE_URL")
     if not runtime_url:
-        print("RUNTIME_DATABASE_URL not set — skipping wafpass_app role check (pre-Phase-1 deployment?).")
+        print("RUNTIME_DATABASE_URL not set — skipping wombat_app role check (pre-Phase-1 deployment?).")
         return
 
     owner = make_url(url)
@@ -86,4 +86,4 @@ command.upgrade(cfg, "head")
 print("Migrations complete.")
 EOF
 
-exec uvicorn wafpass_server.main:app --host 0.0.0.0 --port 8000
+exec uvicorn wombat_server.main:app --host 0.0.0.0 --port 8000

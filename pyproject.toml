@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "wafpass-server"
+name = "wombat-server"
 version = "1.1.0"
-description = "WAF++ PASS – API server for persisting and querying scan results"
+description = "WOMBATpass – API server for persisting and querying scan results"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -16,7 +16,7 @@ authors = [
     { name = "Tim Urlaub" },
 ]
 keywords = [
-    "waf++", "iac", "compliance", "security", "cloud", "api",
+    "wombat", "iac", "compliance", "security", "cloud", "api",
     "devsecops", "governance", "fastapi", "multi-cloud",
 ]
 classifiers = [
@@ -40,7 +40,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
-    "wafpass-core>=1.0.0",
+    "wombat-core>=1.0.0",
     "bcrypt>=4.0",
     "PyJWT>=2.8",
     "python-multipart>=0.0.9",
@@ -49,14 +49,16 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://waf2p.dev"
-Documentation = "https://waf2p.dev/docs/"
+Homepage = "https://www.wombat-gov.dev"
+Documentation = "https://www.wombat-gov.dev/docs/"
 Repository = "https://github.com/WAF2p/wafpass-server"
 "Bug Tracker" = "https://github.com/WAF2p/wafpass-server/issues"
 Community = "https://github.com/WAF2p"
 
 [project.scripts]
-wafpass-server = "wafpass_server.main:start"
+wombat-server = "wombat_server.main:start"
+# Deprecated alias kept for the WAFpass → WOMBATpass migration window.
+wafpass-server = "wombat_server.main:legacy_start"
 
 [project.optional-dependencies]
 saml = ["python3-saml>=1.16"]
@@ -71,7 +73,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["wafpass_server"]
+packages = ["wombat_server", "wafpass_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

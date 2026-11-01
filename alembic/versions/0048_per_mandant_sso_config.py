@@ -13,7 +13,7 @@ backfilled from ``id`` (today ``id`` *is* the provider for every row that
 has ever existed). A new per-mandant override row gets a synthetic
 ``id`` of ``f"{provider}:{mandant_id}"`` (same "plain text primary key,
 app-enforced convention" style already used for ``instance_settings.key``)
-— see ``wafpass_server/routers/sso.py``'s ``_cfg_row_id()``.
+— see ``wombat_server/routers/sso.py``'s ``_cfg_row_id()``.
 
 Two partial unique indexes replace what the bare ``id`` primary key used
 to enforce implicitly:

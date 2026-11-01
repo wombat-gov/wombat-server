@@ -1,6 +1,6 @@
-# Contributing to wafpass-server
+# Contributing to wombat-server
 
-Thank you for contributing to WAF++ PASS Server — the REST API that persists and queries WAF++ compliance scan results.
+Thank you for contributing to WOMBATpass Server — the REST API that persists and queries Wombat compliance scan results.
 
 This document is intentionally short and points to existing files in the repository. When in doubt, check `README.md` for the user-facing API reference and `TECH.md` for architecture and internal conventions.
 
@@ -8,13 +8,13 @@ This document is intentionally short and points to existing files in the reposit
 
 ## What this project is
 
-`wafpass-server` is a FastAPI application backed by PostgreSQL. It stores scan runs produced by the `wafpass` CLI / `wafpass-core` package, exposes CRUD endpoints, and provides authentication (local JWT, OIDC, SAML2), user management, evidence locking, project passports, and public badges.
+`wombat-server` is a FastAPI application backed by PostgreSQL. It stores scan runs produced by the `wombat` CLI / `wombat-core` package, exposes CRUD endpoints, and provides authentication (local JWT, OIDC, SAML2), user management, evidence locking, project passports, and public badges.
 
 Source layout:
 
 ```
 wafpass-server/
-├── wafpass_server/          # Application code
+├── wombat_server/          # Application code
 │   ├── main.py              # FastAPI factory, middleware, startup seeding
 │   ├── config.py            # pydantic-settings environment parsing
 │   ├── database.py          # Async SQLAlchemy engine + session factory
@@ -61,7 +61,7 @@ wafpass-server/
 5. Start the server with auto-reload:
 
    ```bash
-   uvicorn wafpass_server.main:app --reload --port 8000
+   uvicorn wombat_server.main:app --reload --port 8000
    ```
 
 See `README.md` for the full quick-start and environment variable reference.
@@ -74,11 +74,11 @@ Before opening a pull request, run the same checks used in CI:
 
 ```bash
 pytest
-mypy wafpass_server/
-ruff check wafpass_server/
+mypy wombat_server/
+ruff check wombat_server/
 ```
 
-`pytest` runs the test suite under `tests/`. `mypy` and `ruff` cover the application code in `wafpass_server/`.
+`pytest` runs the test suite under `tests/`. `mypy` and `ruff` cover the application code in `wombat_server/`.
 
 ---
 
@@ -86,10 +86,10 @@ ruff check wafpass_server/
 
 Follow the five-step process used throughout the codebase (also documented in `TECH.md`):
 
-1. Create or edit a router in `wafpass_server/routers/`.
-2. Register the router in `wafpass_server/main.py` with `app.include_router(...)`.
-3. Add Pydantic schemas to `wafpass_server/schemas.py`.
-4. If new tables are needed, edit `wafpass_server/models.py` and generate a migration:
+1. Create or edit a router in `wombat_server/routers/`.
+2. Register the router in `wombat_server/main.py` with `app.include_router(...)`.
+3. Add Pydantic schemas to `wombat_server/schemas.py`.
+4. If new tables are needed, edit `wombat_server/models.py` and generate a migration:
 
    ```bash
    alembic revision --autogenerate -m "description"
@@ -111,7 +111,7 @@ See `TECH.md` for the full migration guide.
 
 - Open PRs against the `main` branch.
 - Keep changes focused on one concern per PR.
-- Ensure `pytest`, `mypy wafpass_server/`, and `ruff check wafpass_server/` pass locally.
+- Ensure `pytest`, `mypy wombat_server/`, and `ruff check wombat_server/` pass locally.
 - Update `README.md` and `TECH.md` if you add or change user-facing behavior, API endpoints, or internal architecture.
 - Write clear commit messages that explain the *why*, not just the *what*.
 

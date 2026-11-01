@@ -9,8 +9,8 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.models import SyslogConfig, User, UserAuditLog
-from wafpass_server.syslog import build_syslog_message
+from wombat_server.models import SyslogConfig, User, UserAuditLog
+from wombat_server.syslog import build_syslog_message
 
 
 async def _seed_admin_user(db: AsyncSession, role: str = "admin") -> User:
@@ -119,7 +119,7 @@ async def test_syslog_config_crud(app_client: AsyncClient, db: AsyncSession) -> 
         "syslog_format": "rfc5424",
         "facility": 13,
         "tls_enabled": True,
-        "program_tag": "wafpass-admin",
+        "program_tag": "wombat-admin",
         "severity_overrides": {"login_success": 3},
     }
     resp = await app_client.put("/api/v1/admin/syslog-config", json=payload)
@@ -145,7 +145,7 @@ async def test_syslog_config_test_endpoint_no_host(app_client: AsyncClient, db: 
 
 
 def test_build_syslog_message_rfc5424() -> None:
-    config = SyslogConfig(facility=13, syslog_format="rfc5424", program_tag="wafpass-admin")
+    config = SyslogConfig(facility=13, syslog_format="rfc5424", program_tag="wombat-admin")
     msg = build_syslog_message(
         config,
         action="login",
@@ -159,17 +159,17 @@ def test_build_syslog_message_rfc5424() -> None:
 
 
 def test_build_syslog_message_rfc3164() -> None:
-    config = SyslogConfig(facility=13, syslog_format="rfc3164", program_tag="wafpass-admin")
+    config = SyslogConfig(facility=13, syslog_format="rfc3164", program_tag="wombat-admin")
     msg = build_syslog_message(config, action="logout", detail={}, ip="")
     assert msg.startswith(b"<110>")
-    assert b"wafpass-admin" in msg
+    assert b"wombat-admin" in msg
 
 
 def test_build_syslog_message_severity_override() -> None:
     config = SyslogConfig(
         facility=13,
         syslog_format="rfc5424",
-        program_tag="wafpass-admin",
+        program_tag="wombat-admin",
         severity_overrides={"login": 3},
     )
     msg = build_syslog_message(config, action="login", detail={}, ip="")

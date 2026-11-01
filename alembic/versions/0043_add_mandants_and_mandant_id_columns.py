@@ -8,7 +8,7 @@ is nullable, the new ``instance_settings`` row seeds to "single_tenant", and
 no existing query behaviour changes. The DDL that actually enforces
 isolation (``NOT NULL`` + RLS policies) is intentionally *not* a further
 Alembic revision — it lives as a plain, state-gated Python function
-(``wafpass_server/db_migrations/activate_multi_mandant_ddl.py``) invoked
+(``wombat_server/db_migrations/activate_multi_mandant_ddl.py``) invoked
 only by the one-way admin activation endpoint (Phase 2). That keeps a
 routine ``alembic upgrade head`` from ever being able to trigger it, and
 keeps this migration chain a single, uneventful line.

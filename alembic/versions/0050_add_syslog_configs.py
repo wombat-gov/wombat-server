@@ -48,24 +48,24 @@ def upgrade() -> None:
         sa.Column("format", sa.Text(), nullable=False, server_default="rfc5424"),
         sa.Column("facility", sa.Integer(), nullable=False, server_default="13"),
         sa.Column("tls_enabled", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("program_tag", sa.Text(), nullable=False, server_default="wafpass-admin"),
+        sa.Column("program_tag", sa.Text(), nullable=False, server_default="wombat-admin"),
         sa.Column("severity_overrides", JSONB(), nullable=False, server_default="{}"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
 
     # Seed the singleton row from legacy environment variables, if present.
-    enabled = _env_or_default("WAFPASS_SYSLOG_ENABLED", False, bool)
-    host = _env_or_default("WAFPASS_SYSLOG_HOST", "")
-    port = _env_or_default("WAFPASS_SYSLOG_PORT", 514, int)
-    protocol = _env_or_default("WAFPASS_SYSLOG_PROTOCOL", "udp")
-    fmt = _env_or_default("WAFPASS_SYSLOG_FORMAT", "rfc5424")
-    facility = _env_or_default("WAFPASS_SYSLOG_FACILITY", 13, int)
+    enabled = _env_or_default("WOMBAT_SYSLOG_ENABLED", False, bool)
+    host = _env_or_default("WOMBAT_SYSLOG_HOST", "")
+    port = _env_or_default("WOMBAT_SYSLOG_PORT", 514, int)
+    protocol = _env_or_default("WOMBAT_SYSLOG_PROTOCOL", "udp")
+    fmt = _env_or_default("WOMBAT_SYSLOG_FORMAT", "rfc5424")
+    facility = _env_or_default("WOMBAT_SYSLOG_FACILITY", 13, int)
 
     op.execute(
         sa.text(
             "INSERT INTO syslog_configs (id, enabled, host, port, protocol, format, facility, tls_enabled, program_tag, severity_overrides) "
-            "VALUES (1, :enabled, :host, :port, :protocol, :format, :facility, false, 'wafpass-admin', '{}')"
+            "VALUES (1, :enabled, :host, :port, :protocol, :format, :facility, false, 'wombat-admin', '{}')"
         ).bindparams(
             enabled=enabled,
             host=host,

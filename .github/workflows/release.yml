@@ -14,7 +14,7 @@ jobs:
       attestations: write  # persist build-provenance attestations (if added later)
 
     # tests/test_mandants.py (and every other DB-gated test) is skipped,
-    # not failed, whenever WAFPASS_TEST_DATABASE_URL is unset — which it
+    # not failed, whenever WOMBAT_TEST_DATABASE_URL is unset — which it
     # always was here before this service existed, so the 59+ multi-mandant
     # integration tests never actually ran in CI, only locally. This service
     # container plus the env var on the Test step below make them run for
@@ -113,7 +113,7 @@ jobs:
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wafpass-server-sbom
+          name: wombat-server-sbom
           path: |
             sbom.cyclonedx.json
             sbom.spdx.json
@@ -125,7 +125,7 @@ jobs:
       - name: Test
         run: pytest
         env:
-          WAFPASS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          WOMBAT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
       # ── Publish to PyPI (trusted publishing / OIDC) ───────────────────────────
       - name: Publish to PyPI
@@ -146,7 +146,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name:              ${{ steps.ver.outputs.tag }}
-          name:                  WAF++ PASS Server ${{ steps.ver.outputs.tag }}
+          name:                  WOMBATpass Server ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           files: |
             dist/*.whl
