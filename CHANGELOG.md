@@ -34,6 +34,21 @@ Legacy compatibility is retained for one migration window:
 
 These aliases are deprecated and will be removed in a future release.
 
+### Security
+
+- Confined `POST /scan` and `/auto-fix` paths to `WOMBAT_SCAN_BASE_DIR`
+  (defaults to the server working directory), rejecting relative traversal,
+  absolute-path escapes and symlink escapes.
+- Sanitised sandbox filenames so an HCL payload cannot write outside its
+  temporary directory.
+- Escaped every database/URL value rendered by the public achievement
+  verification page and added a restrictive CSP.
+- Restricted SSO callback redirects to the dashboard origins configured in
+  `CORS_ORIGINS`; query and fragment injection is encoded or dropped.
+- Documented SHA-256 key/token lookups as a verified false positive for the
+  CodeQL weak-hash query: the inputs are high-entropy `secrets.token_*`
+  values, while passwords continue to use bcrypt.
+
 ### Changed
 
 - Branding, documentation, Docker image names and compose service names now use

@@ -83,8 +83,9 @@ class Settings(BaseSettings):
     # Server-side scan settings
     # Set WOMBAT_SCAN_ENABLED=false to disable POST /scan entirely.
     wombat_scan_enabled: bool = True
-    # If set, all scan paths must resolve within this directory (path-traversal guard).
-    # Leave empty to allow any path accessible to the server process (dev/local only).
+    # Base directory for server-side scan and auto-fix paths. Every supplied
+    # path is resolved and confined to this directory; symlinks that escape it
+    # are rejected. When empty the server's working directory is used.
     wombat_scan_base_dir: str = ""
 
     # Optional waivers file used by the auto-fixer to skip waived checks.

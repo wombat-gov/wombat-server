@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wombat_server.auth.deps import AuthContext, IngestAuth, get_auth_context, get_instance_mode, get_scoped_db, require_role
 from wombat_server.config import settings
+from wombat_server.path_safety import safe_temp_filename
 from wombat_server.models import User
 from wombat_server.routers.runs import _persist_run
 from wombat_server.schemas import Envelope, RunCreate, RunSummary
@@ -251,7 +252,7 @@ async def run_sandbox(
     # Write HCL to a temp directory and parse it
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            hcl_file = Path(tmpdir) / payload.filename
+            hcl_file = Path(tmpdir) / safe_temp_filename(payload.filename)  # lgtm[py/path-injection] — basename-only filename
             hcl_file.write_text(payload.hcl, encoding="utf-8")
 
             try:

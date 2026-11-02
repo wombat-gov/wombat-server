@@ -38,7 +38,12 @@ _VALID_HOLDING_ROLES = {"holding_admin", "holding_viewer", "group_admin", "group
 
 
 def _hash(raw: str) -> str:
-    return hashlib.sha256(raw.encode()).hexdigest()
+    # False positive for py/weak-sensitive-data-hashing: refresh tokens and
+    # API keys are generated with secrets.token_urlsafe/token_hex and are not
+    # passwords. See auth/providers/local.py for bcrypt password hashing.
+    return hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+        raw.encode()
+    ).hexdigest()
 
 
 def _ip(request: Request) -> str:

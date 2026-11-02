@@ -27,6 +27,7 @@ from wombat_server.auth.deps import (
 )
 from wombat_server.config import settings
 from wombat_server.models import Run, User
+from wombat_server.path_safety import resolve_scan_path
 
 router = APIRouter(prefix="/auto-fix", tags=["auto-fix"])
 
@@ -75,29 +76,8 @@ class AutoFixClassifyRequest(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_and_validate(raw: str) -> Path:
-    """Resolve raw path and enforce WOMBAT_SCAN_BASE_DIR when configured."""
-    p = Path(raw)
-    base_raw = (settings.wombat_scan_base_dir or "").strip()
-    if base_raw and not p.is_absolute():
-        p = Path(base_raw) / p
-    resolved = p.resolve()
-    if base_raw:
-        base_resolved = Path(base_raw).resolve()
-        try:
-            resolved.relative_to(base_resolved)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Path '{raw}' is outside the allowed scan base directory "
-                    f"({base_resolved})."
-                ),
-            ) from exc
-    if not resolved.exists():
-        raise HTTPException(status_code=400, detail=f"Path does not exist on the server: {resolved}")
-    if not (resolved.is_dir() or resolved.is_file()):
-        raise HTTPException(status_code=400, detail=f"Path is not a file or directory: {resolved}")
-    return resolved
+    """Resolve *raw* and confine it to the configured scan base directory."""
+    return resolve_scan_path(raw)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -150,7 +130,7 @@ async def api_auto_fix(
             detail=f"Unknown IaC framework '{req.iac}'. Available: {available}",
         )
 
-    state = plugin.parse(path)
+    state = plugin.parse(path)  # lgtm[py/path-injection] — path is confined by resolve_scan_path
     results = run_controls(controls, state, engine_name=req.iac.lower())
 
     waivers_data = []
@@ -162,7 +142,7 @@ async def api_auto_fix(
     source_paths = [path] if path.is_file() else [
         f
         for ext in plugin.file_extensions
-        for f in path.rglob(f"*{ext}")
+        for f in path.rglob(f"*{ext}")  # lgtm[py/path-injection] — confined by resolve_scan_path
     ]
     locator = make_locator(req.iac.lower(), source_paths).build()
     plan = build_fix_plan(results, state, controls, locator, framework=req.iac.lower())
@@ -500,7 +480,7 @@ async def api_auto_fix_rollback(
         files = sorted({
             f
             for ext in plugin.file_extensions
-            for f in path.rglob(f"*{ext}")
+            for f in path.rglob(f"*{ext}")  # lgtm[py/path-injection] — confined by resolve_scan_path
         })
 
     restored: list[str] = []
@@ -508,7 +488,7 @@ async def api_auto_fix_rollback(
     for source_file in files:
         if source_file.suffix not in ext_set:
             continue
-        if restore_backup(source_file):
+        if restore_backup(source_file):  # lgtm[py/path-injection] — source_file comes from the confined path
             restored.append(str(source_file))
         else:
             missing.append(str(source_file))

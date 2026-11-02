@@ -1,6 +1,8 @@
 """Verified achievement endpoints — maturity tier milestones with public verification."""
 from __future__ import annotations
 
+import html
+import re
 import secrets
 from textwrap import dedent
 from typing import Annotated
@@ -181,31 +183,46 @@ async def verify_achievement(
         raise HTTPException(status_code=404, detail="Achievement not found")
 
     color = TIER_COLORS.get(achievement.tier_level, "#0094FF")
-    achieved_date = achievement.achieved_at.strftime("%B %d, %Y at %H:%M UTC")
+    if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        color = "#0094FF"
+
+    # Everything below comes from the database or the URL path.  Escape it
+    # before it reaches the HTML response: this page is public and must never
+    # reflect project names, tier labels or tokens as markup.
+    tier_label = html.escape(str(achievement.tier_label))
+    project_name = html.escape(str(achievement.project))
+    tier_level = html.escape(str(achievement.tier_level))
+    score_text = html.escape(str(achievement.score))
+    token_text = html.escape(token)
+    achieved_date = html.escape(achievement.achieved_at.strftime("%B %d, %Y at %H:%M UTC"))
 
     pillar_rows = ""
-    for pillar, score in (achievement.snapshot_jsonb or {}).items():
-        bar_color = "#059669" if score >= 80 else "#d97706" if score >= 60 else "#DA2C38"
+    for pillar, raw_score in (achievement.snapshot_jsonb or {}).items():
+        try:
+            score_value = max(0.0, min(100.0, float(raw_score)))
+        except (TypeError, ValueError):
+            score_value = 0.0
+        bar_color = "#059669" if score_value >= 80 else "#d97706" if score_value >= 60 else "#DA2C38"
         pillar_rows += f"""
         <tr>
-          <td style="padding:0.5rem 1rem;color:#94a3b8;text-transform:capitalize">{pillar}</td>
+          <td style="padding:0.5rem 1rem;color:#94a3b8;text-transform:capitalize">{html.escape(str(pillar))}</td>
           <td style="padding:0.5rem 1rem">
             <div style="display:flex;align-items:center;gap:0.75rem">
               <div style="flex:1;height:8px;background:#1e293b;border-radius:999px;overflow:hidden">
-                <div style="height:100%;width:{score}%;background:{bar_color};border-radius:999px"></div>
+                <div style="height:100%;width:{score_value:g}%;background:{bar_color};border-radius:999px"></div>
               </div>
-              <span style="font-size:0.8rem;font-weight:700;color:{bar_color};min-width:2.5rem;text-align:right">{score}</span>
+              <span style="font-size:0.8rem;font-weight:700;color:{bar_color};min-width:2.5rem;text-align:right">{html.escape(str(raw_score))}</span>
             </div>
           </td>
         </tr>"""
 
-    html = dedent(f"""
+    page = dedent(f"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>WOMBATpass — Verified Achievement · {achievement.tier_label}</title>
+          <title>WOMBATpass — Verified Achievement · {tier_label}</title>
           <style>
             *{{box-sizing:border-box;margin:0;padding:0}}
             body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1220;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem 1rem}}
@@ -226,9 +243,9 @@ async def verify_achievement(
         </head>
         <body>
           <div class="card">
-            <div class="badge">L{achievement.tier_level}</div>
-            <div class="tier-label">{achievement.tier_label}</div>
-            <div class="project-name">{achievement.project}</div>
+            <div class="badge">L{tier_level}</div>
+            <div class="tier-label">{tier_label}</div>
+            <div class="project-name">{project_name}</div>
             <div class="achieved-date">Achieved on {achieved_date}</div>
 
             <div class="verified-pill">
@@ -242,7 +259,7 @@ async def verify_achievement(
             </div>
 
             <div class="score-circle">
-              <span class="score-value">{achievement.score}</span>
+              <span class="score-value">{score_text}</span>
               <span class="score-sub">score</span>
             </div>
 
@@ -250,7 +267,7 @@ async def verify_achievement(
             <table>{pillar_rows}</table>
 
             <div class="section-title">Verification Token</div>
-            <div class="token-box">{token}</div>
+            <div class="token-box">{token_text}</div>
 
             <div class="footer">
               This page is publicly accessible and serves as proof of excellence.<br/>
@@ -261,4 +278,14 @@ async def verify_achievement(
         </html>
     """).strip()
 
-    return HTMLResponse(content=html)
+    return HTMLResponse(
+        content=page,
+        headers={
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )

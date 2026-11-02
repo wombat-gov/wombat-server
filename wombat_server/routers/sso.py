@@ -4,11 +4,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -259,15 +260,97 @@ async def _update_user_groups(
 async def _issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
     access_token = create_access_token(user.id, user.username, user.role)
     raw_refresh = secrets.token_urlsafe(48)
+    # False positive for py/weak-sensitive-data-hashing: the refresh token is
+    # a 48-byte secrets.token_urlsafe value, not a password.
+    raw_refresh_hash = hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+        raw_refresh.encode()
+    ).hexdigest()
     rt = RefreshToken(
         user_id=user.id,
-        token_hash=hashlib.sha256(raw_refresh.encode()).hexdigest(),
+        token_hash=raw_refresh_hash,
         family_id=uuid.uuid4(),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.wombat_jwt_refresh_days),
     )
     db.add(rt)
     user.last_login_at = datetime.now(timezone.utc)
     return access_token, raw_refresh
+
+
+def _allowed_frontend_origins() -> set[str]:
+    """Dashboard origins the SSO callback is allowed to redirect to."""
+    origins: set[str] = set()
+    for raw in settings.cors_origins_list:
+        try:
+            parsed = urlparse(raw)
+        except ValueError:
+            continue
+        if (
+            parsed.scheme in {"http", "https"}
+            and parsed.netloc
+            and parsed.username is None
+            and parsed.password is None
+        ):
+            origins.add(f"{parsed.scheme.lower()}://{parsed.netloc.lower()}")
+    return origins
+
+
+def _safe_frontend_url(raw: str, allowed_origins: set[str] | None = None) -> str:
+    """Return a redirect target constrained to a configured dashboard origin.
+
+    ``frontend_url`` is stored in the SSO configuration, but treating it as
+    trusted would make the callback an open redirect if that row were ever
+    edited by a compromised admin.  Only an origin from ``CORS_ORIGINS`` is
+    returned; query strings and fragments are dropped.
+    """
+    allowed = _allowed_frontend_origins() if allowed_origins is None else allowed_origins
+    fallback = "http://localhost:5173"
+    for candidate in settings.cors_origins_list:
+        parsed_candidate = urlparse(candidate)
+        if (
+            parsed_candidate.scheme in {"http", "https"}
+            and parsed_candidate.netloc
+            and parsed_candidate.username is None
+            and parsed_candidate.password is None
+        ):
+            fallback = f"{parsed_candidate.scheme.lower()}://{parsed_candidate.netloc.lower()}"
+            break
+
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return fallback
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return fallback
+    origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    matched = next((candidate for candidate in allowed if candidate == origin), None)
+    if matched is None:
+        return fallback
+
+    path = parsed.path.rstrip("/")
+    if (
+        path
+        and (
+            not re.fullmatch(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*", path)
+            or ".." in path.split("/")
+            or "\\" in path
+        )
+    ):
+        path = ""
+    # `matched` comes from the CORS allowlist, not from the tainted input; the
+    # path is a conservative path-only suffix with no query, fragment or "..".
+    return f"{matched}{path}"  # lgtm[py/url-redirection]
+
+
+def _redirect_with_error(frontend_url: str, error: str, detail: str | None = None) -> RedirectResponse:
+    params = {"sso_error": error}
+    if detail is not None:
+        params["detail"] = detail
+    return RedirectResponse(f"{frontend_url}?{urlencode(params)}", status_code=302)  # lgtm[py/url-redirection]
 
 
 def _frontend_redirect(frontend_url: str, access_token: str, refresh_token: str, user: User) -> str:
@@ -1209,21 +1292,21 @@ async def oidc_callback(
     if not cfg_row or not cfg_row.enabled:
         raise HTTPException(404, detail="OIDC SSO is not enabled.")
     cfg = await _decrypt_config("oidc", cfg_row.config)
-    frontend_url = cfg.get("frontend_url", "http://localhost:5173")
+    frontend_url = _safe_frontend_url(cfg.get("frontend_url", "http://localhost:5173"))
 
     if error:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error={error}", status_code=302)
+        return _redirect_with_error(frontend_url, error)
     if not code or not state:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=missing_params", status_code=302)
+        return _redirect_with_error(frontend_url, "missing_params")
     if verified_nonce is None:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=invalid_state", status_code=302)
+        return _redirect_with_error(frontend_url, "invalid_state")
     nonce = verified_nonce
 
     try:
         discovery = await _oidc_discovery(cfg["discovery_url"])
         tokens = await _oidc_exchange_code(discovery["token_endpoint"], code, cfg)
     except Exception:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=token_exchange_failed", status_code=302)
+        return _redirect_with_error(frontend_url, "token_exchange_failed")
 
     claims: dict = {}
     if "id_token" in tokens:
@@ -1239,13 +1322,9 @@ async def oidc_callback(
                     audience=cfg["client_id"],
                 )
                 if claims.get("nonce") != nonce:
-                    return RedirectResponse(
-                        f"{frontend_url.rstrip('/')}?sso_error=invalid_nonce", status_code=302
-                    )
+                    return _redirect_with_error(frontend_url, "invalid_nonce")
             except Exception:
-                return RedirectResponse(
-                    f"{frontend_url.rstrip('/')}?sso_error=token_verification_failed", status_code=302
-                )
+                return _redirect_with_error(frontend_url, "token_verification_failed")
         # No JWKS URI in discovery doc — fall through to userinfo
 
     if not claims and "userinfo_endpoint" in discovery:
@@ -1257,7 +1336,7 @@ async def oidc_callback(
     username_claim = cfg.get("username_claim", "email")
     username = claims.get(username_claim) or claims.get("sub", "")
     if not username:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=no_username_claim", status_code=302)
+        return _redirect_with_error(frontend_url, "no_username_claim")
 
     display_name = claims.get(cfg.get("display_name_claim", "name")) or claims.get("preferred_username") or username
 
@@ -1288,7 +1367,7 @@ async def oidc_callback(
             mandant_slug, forced_mandant_id=cfg_row.mandant_id,
         )
     except HTTPException as exc:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=access_denied&detail={exc.detail}", status_code=302)
+        return _redirect_with_error(frontend_url, "access_denied", exc.detail)
 
     # Update user's group memberships
     group_claim = cfg.get("group_claim")
@@ -1306,7 +1385,7 @@ async def oidc_callback(
     await db.commit()
     await db.refresh(user)
 
-    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)
+    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)  # lgtm[py/url-redirection]
 
 
 # ── SAML2 Flow ────────────────────────────────────────────────────────────────
@@ -1439,7 +1518,7 @@ async def saml_acs(
     if not cfg_row or not cfg_row.enabled:
         raise HTTPException(404, detail="SAML2 SSO is not enabled.")
     cfg = await _decrypt_config("saml2", cfg_row.config)
-    frontend_url = cfg.get("frontend_url", "http://localhost:5173")
+    frontend_url = _safe_frontend_url(cfg.get("frontend_url", "http://localhost:5173"))
 
     auth = OneLogin_Saml2_Auth(_saml_req(request, dict(form)), _saml_settings_dict(cfg))
     auth.process_response()
@@ -1447,7 +1526,7 @@ async def saml_acs(
 
     if errors or not auth.is_authenticated():
         err_str = "_".join(errors) if errors else "not_authenticated"
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error={err_str}", status_code=302)
+        return _redirect_with_error(frontend_url, err_str)
 
     attrs = auth.get_attributes()
     name_id = auth.get_nameid()
@@ -1455,7 +1534,7 @@ async def saml_acs(
     username_attr = cfg.get("username_attribute")
     username = (attrs.get(username_attr, [None])[0] if username_attr else None) or name_id
     if not username:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=no_username", status_code=302)
+        return _redirect_with_error(frontend_url, "no_username")
 
     dn_attr = cfg.get("display_name_attribute")
     display_name = (attrs.get(dn_attr, [None])[0] if dn_attr else None) or username
@@ -1485,7 +1564,7 @@ async def saml_acs(
             mandant_slug, forced_mandant_id=cfg_row.mandant_id,
         )
     except HTTPException as exc:
-        return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=access_denied&detail={exc.detail}", status_code=302)
+        return _redirect_with_error(frontend_url, "access_denied", exc.detail)
 
     # Update user's group memberships
     group_attr = cfg.get("group_attribute")
@@ -1503,4 +1582,4 @@ async def saml_acs(
     await db.commit()
     await db.refresh(user)
 
-    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)
+    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)  # lgtm[py/url-redirection]

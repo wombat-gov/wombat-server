@@ -8,10 +8,9 @@ Unlike /sandbox (ephemeral, IaC-snippet only), this endpoint:
 
 Security
 --------
-If WOMBAT_SCAN_BASE_DIR is set, all paths are resolved and checked to be
-within that directory — preventing path-traversal to arbitrary filesystem
-locations.  If unset, any path accessible to the server process is allowed
-(suitable for local / dev deployments only).
+All paths are resolved and checked to be within WOMBAT_SCAN_BASE_DIR.  When
+that variable is unset the base defaults to the server's working directory,
+so arbitrary absolute paths are never accepted by default.
 
 The endpoint can be disabled entirely by setting WOMBAT_SCAN_ENABLED=false.
 """
@@ -30,6 +29,7 @@ from wombat_server.auth.deps import IngestAuth, require_ingest, require_role
 from wombat_server.config import settings
 from wombat_server.database import get_db
 from wombat_server.models import ApiKeyUsageLog, Run, User
+from wombat_server.path_safety import resolve_scan_path
 from wombat_server.schemas import Envelope, FindingSchema, RunSummary
 
 logger = logging.getLogger(__name__)
@@ -68,35 +68,8 @@ class ScanRequest(BaseModel):
 # ── Path validation ───────────────────────────────────────────────────────────
 
 def _resolve_and_validate(raw: str) -> Path:
-    """Resolve *raw* to an absolute Path and enforce WOMBAT_SCAN_BASE_DIR if set."""
-    p = Path(raw)
-
-    # If a base-dir is configured and the supplied path is relative, anchor it.
-    base_raw = (settings.wombat_scan_base_dir or "").strip()
-    if base_raw and not p.is_absolute():
-        p = Path(base_raw) / p
-
-    resolved = p.resolve()
-
-    if base_raw:
-        base_resolved = Path(base_raw).resolve()
-        try:
-            resolved.relative_to(base_resolved)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Path '{raw}' is outside the allowed scan base directory "
-                    f"({base_resolved}). Set WOMBAT_SCAN_BASE_DIR to permit broader access."
-                ),
-            )
-
-    if not resolved.exists():
-        raise HTTPException(status_code=400, detail=f"Path does not exist on the server: {resolved}")
-    if not (resolved.is_dir() or resolved.is_file()):
-        raise HTTPException(status_code=400, detail=f"Path is not a file or directory: {resolved}")
-
-    return resolved
+    """Resolve *raw* and confine it to the configured scan base directory."""
+    return resolve_scan_path(raw)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

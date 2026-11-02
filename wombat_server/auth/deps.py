@@ -76,7 +76,13 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def _hash(raw: str) -> str:
-    return hashlib.sha256(raw.encode()).hexdigest()
+    # False positive for py/weak-sensitive-data-hashing: `raw` is a
+    # high-entropy API key from secrets.token_hex, not a password. Passwords
+    # are hashed with bcrypt in auth/providers/local.py. SHA-256 is used only
+    # as a deterministic lookup index for the stored key/token hash.
+    return hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+        raw.encode()
+    ).hexdigest()
 
 
 async def _set_current_user_id(db: AsyncSession, user_id: uuid.UUID) -> None:
