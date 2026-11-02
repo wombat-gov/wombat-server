@@ -79,9 +79,10 @@ def _hash(raw: str) -> str:
     # False positive for py/weak-sensitive-data-hashing: `raw` is a
     # high-entropy API key from secrets.token_hex, not a password. Passwords
     # are hashed with bcrypt in auth/providers/local.py. SHA-256 is used only
-    # as a deterministic lookup index for the stored key/token hash.
-    return hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
-        raw.encode()
+    # as a deterministic lookup index for the stored key/token hash. CodeQL's
+    # "authorization key" name heuristic is what pulls this into the query.
+    return hashlib.sha256(
+        raw.encode()  # codeql[py/weak-sensitive-data-hashing]
     ).hexdigest()
 
 
