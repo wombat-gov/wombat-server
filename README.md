@@ -5,8 +5,8 @@ REST API for persisting and querying WOMBATpass scan results. Part of the [Womba
 | Component | Role |
 |-----------|------|
 | `pass/` · `wombat-core` | Compliance engine, CLI, IaC parsers ← produces results |
-| `wafpass-server/` · **this package** | FastAPI + PostgreSQL · stores results, exposes APIs |
-| `wafpass-dashboard/` · React SPA | Consumes this API · visualises compliance posture |
+| `wombat-server/` · **this package** | FastAPI + PostgreSQL · stores results, exposes APIs |
+| `wombat-dashboard/` · React SPA | Consumes this API · visualises compliance posture |
 
 > **BREAKING CHANGE:** All API routes are now versioned under `/api/v1`. Update any direct callers, the dashboard, and the CLI to use paths like `/api/v1/runs`, `/api/v1/auth/login`, and `/api/v1/public/badge/{project}.svg`. `/health`, `/version`, and `/framework-update-info.yml` remain at the root.
 
@@ -508,7 +508,7 @@ The build context is the **monorepo root** because the Dockerfile copies `pass/`
 
 ```bash
 # From repo root
-docker build -t wombat-server -f wafpass-server/Dockerfile .
+docker build -t wombat-server -f wombat-server/Dockerfile .
 
 docker run \
   -e DATABASE_URL=postgresql+asyncpg://wombat:wombat@host.docker.internal/wombat \
