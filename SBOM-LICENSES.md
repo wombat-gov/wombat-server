@@ -1,11 +1,11 @@
 # Software Bill of Materials and License Overview
 
-This document summarizes the software components used by **wafpass-server**
+This document summarizes the software components used by **wombat-server**
 and their licenses. It is generated for CNCF submission readiness.
 
 ## Project metadata
 
-- **Project:** wafpass-server
+- **Project:** wombat-server
 - **Own license:** Apache-2.0
 - **License file present:** yes
 
@@ -84,7 +84,7 @@ Release builds also attach the CycloneDX and SPDX files to the GitHub release.
 | typing_extensions | 4.16.0 | PSF-2.0 |
 | uvicorn | 0.54.0 | BSD-3-Clause |
 | uvloop | 0.23.0 | MIT OR License :: OSI Approved :: Apache Software License |
-| wafpass-core | 1.1.2 | Apache-2.0 OR License :: OSI Approved :: Apache Software License |
+| wombat-core | 1.1.2 | Apache-2.0 OR License :: OSI Approved :: Apache Software License |
 | watchfiles | 1.3.0 | MIT |
 | websockets | 17.2 | BSD-3-Clause |
 

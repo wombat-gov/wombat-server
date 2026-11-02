@@ -5,7 +5,7 @@ Promotes the ad-hoc verification performed by hand throughout Phases 0-4
 committed, repeatable suite. See decisions/adrs/ADR-003-multi-mandant-tenancy.md
 and .plan.md.
 
-Requires WAFPASS_TEST_DATABASE_URL — see tests/conftest.py's module
+Requires WOMBAT_TEST_DATABASE_URL — see tests/conftest.py's module
 docstring for how to start one. Every test in this module is skipped
 (not failed) when it is unset.
 """
@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import text
 
 from tests.conftest import MandantTestDb
-from wafpass_server.auth.jwt_utils import create_access_token
-from wafpass_server.auth.providers.local import hash_password
+from wombat_server.auth.jwt_utils import create_access_token
+from wombat_server.auth.providers.local import hash_password
 
 
 # ── Seeding helpers ───────────────────────────────────────────────────────────
@@ -287,15 +287,15 @@ async def test_bootstrap_admin_seed_check_not_blinded_by_rls_after_activation(
     (no mandate, no holding flag), crashing the entire startup. Found via
     a real crash-loop (9 restarts) on a live instance already activated.
     `app_client` is depended on only for its side effect of pointing
-    wafpass_server.database._owner_engine at this test's own database.
+    wombat_server.database._owner_engine at this test's own database.
     """
     admin_id = await seed_user(mandant_db, username="admin1", role="admin")
     await activate(app_client, bearer(admin_id, "admin1", "admin"))
 
-    from wafpass_server.config import settings
-    monkeypatch.setattr(settings, "wafpass_admin_password", "some-bootstrap-password")
+    from wombat_server.config import settings
+    monkeypatch.setattr(settings, "wombat_admin_password", "some-bootstrap-password")
 
-    from wafpass_server.main import seed_bootstrap_admin_if_empty
+    from wombat_server.main import seed_bootstrap_admin_if_empty
     import logging
     await seed_bootstrap_admin_if_empty(logging.getLogger("test"))
 
@@ -514,14 +514,14 @@ async def test_legacy_api_key_rejected_unless_explicitly_mapped(mandant_db: Mand
     await activate(app_client, bearer(admin_id, "admin1", "admin"))
     default_mandant = await fetch_scalar(mandant_db, "SELECT id FROM mandants WHERE slug = 'default'")
 
-    from wafpass_server.config import settings
-    monkeypatch.setattr(settings, "wafpass_api_key", "legacy-shared-secret")
-    monkeypatch.setattr(settings, "wafpass_legacy_api_key_mandant_slug", "")
+    from wombat_server.config import settings
+    monkeypatch.setattr(settings, "wombat_api_key", "legacy-shared-secret")
+    monkeypatch.setattr(settings, "wombat_legacy_api_key_mandant_slug", "")
 
     r = await app_client.post("/api/v1/runs", json={"project": "legacy-proj", "score": 20}, headers={"X-Api-Key": "legacy-shared-secret"})
     assert r.status_code == 403, r.text
 
-    monkeypatch.setattr(settings, "wafpass_legacy_api_key_mandant_slug", "default")
+    monkeypatch.setattr(settings, "wombat_legacy_api_key_mandant_slug", "default")
     r = await app_client.post("/api/v1/runs", json={"project": "legacy-proj", "score": 20}, headers={"X-Api-Key": "legacy-shared-secret"})
     assert r.status_code == 201, r.text
     run_mandant = await fetch_scalar(mandant_db, "SELECT mandant_id FROM runs WHERE project = 'legacy-proj'")
@@ -589,7 +589,7 @@ async def test_sso_new_user_requires_mandate_claim_once_multimandant(mandant_db:
     await activate(app_client, bearer(admin_id, "admin1", "admin"))
     await seed_mandant(mandant_db, name="Acme", slug="acme")
 
-    from wafpass_server.routers.sso import _provision_user
+    from wombat_server.routers.sso import _provision_user
 
     async with mandant_db.app_sessionmaker() as session:
         with pytest.raises(Exception):
@@ -619,7 +619,7 @@ async def test_sso_existing_user_assigns_once_then_rejects_mismatch(mandant_db: 
     globex_id = await seed_mandant(mandant_db, name="Globex", slug="globex")
     await seed_user(mandant_db, username="ssouser", role="engineer", password=None, mandant_id=None)
 
-    from wafpass_server.routers.sso import _provision_user
+    from wombat_server.routers.sso import _provision_user
 
     async with mandant_db.app_sessionmaker() as session:
         user = await _provision_user(
@@ -646,7 +646,7 @@ async def test_sso_existing_user_assigns_once_then_rejects_mismatch(mandant_db: 
 def test_sign_state_roundtrip_carries_cfg_mandant_id() -> None:
     import secrets as _secrets
 
-    from wafpass_server.routers.sso import _sign_state, _verify_state
+    from wombat_server.routers.sso import _sign_state, _verify_state
 
     nonce = _secrets.token_hex(8)
     mandant_id = uuid.uuid4()
@@ -660,8 +660,8 @@ def test_sign_state_roundtrip_carries_cfg_mandant_id() -> None:
 
 @pytest.mark.asyncio
 async def test_sso_config_resolution_prefers_override_falls_back_to_default(mandant_db: MandantTestDb) -> None:
-    from wafpass_server.models import SsoConfig
-    from wafpass_server.routers.sso import _cfg_row_id, _get_cfg
+    from wombat_server.models import SsoConfig
+    from wombat_server.routers.sso import _cfg_row_id, _get_cfg
 
     acme_id = await seed_mandant(mandant_db, name="Acme", slug="acme")
     globex_id = await seed_mandant(mandant_db, name="Globex", slug="globex")
@@ -700,7 +700,7 @@ async def test_provision_user_forced_mandant_id_overrides_claim(mandant_db: Mand
     acme_id = await seed_mandant(mandant_db, name="Acme", slug="acme")
     globex_id = await seed_mandant(mandant_db, name="Globex", slug="globex")
 
-    from wafpass_server.routers.sso import _provision_user
+    from wombat_server.routers.sso import _provision_user
 
     # forced_mandant_id (a per-mandant SSO config's own identity) wins even
     # though mandant_slug (a claim value) points elsewhere — ADR-005: a
@@ -741,7 +741,7 @@ async def test_provision_user_rejects_local_only_mandate(mandant_db: MandantTest
     local_only_id = uuid.UUID(r.json()["data"]["id"])
     assert r.json()["data"]["auth_mode"] == "local_only"
 
-    from wafpass_server.routers.sso import _provision_user
+    from wombat_server.routers.sso import _provision_user
 
     # Claim-based path: the shared/default IdP's claim happens to point at
     # a mandate that opted out of SSO entirely — must not provision anyway.
@@ -914,8 +914,8 @@ async def test_mandant_sso_config_secret_redacted_and_round_trips(mandant_db: Ma
 
     from sqlalchemy import select
 
-    from wafpass_server.models import SsoConfig
-    from wafpass_server.routers.sso import _decrypt_config
+    from wombat_server.models import SsoConfig
+    from wombat_server.routers.sso import _decrypt_config
 
     async with mandant_db.owner_sessionmaker() as session:
         acme_row = (await session.execute(
@@ -1495,7 +1495,7 @@ async def test_migration_0045_retrofits_already_activated_instance_policies() ->
     deployment's activation actually produced, not whatever the current
     _policy_sql() says today), then upgrades to 0045 and confirms a
     group_admin's cross-mandate read — impossible under the old policy —
-    now works. Skipped under the same WAFPASS_TEST_DATABASE_URL env var as
+    now works. Skipped under the same WOMBAT_TEST_DATABASE_URL env var as
     every other test in this module; does not use the shared `mandant_db`
     fixture, since that fixture always migrates to head.
     """
@@ -1509,7 +1509,7 @@ async def test_migration_0045_retrofits_already_activated_instance_policies() ->
     from sqlalchemy.engine import make_url
 
     from tests.conftest import _APP_PASSWORD, _APP_ROLE, _ensure_app_role
-    from wafpass_server.db_migrations.activate_multi_mandant_ddl import ALL_TENANT_TABLES, _SELF_LOOKUP_TENANT_TABLES
+    from wombat_server.db_migrations.activate_multi_mandant_ddl import ALL_TENANT_TABLES, _SELF_LOOKUP_TENANT_TABLES
 
     def _old_policy_sql(table: str) -> str:
         # The pre-6b policy shape (0044 and earlier) — hand-written here,
@@ -1537,15 +1537,15 @@ async def test_migration_0045_retrofits_already_activated_instance_policies() ->
             f"    WITH CHECK (\n        {check_sql}\n    );"
         )
 
-    server_dsn = os.environ.get("WAFPASS_TEST_DATABASE_URL")
+    server_dsn = os.environ.get("WOMBAT_TEST_DATABASE_URL")
     if not server_dsn:
         pytest.skip(
-            "Set WAFPASS_TEST_DATABASE_URL to a reachable Postgres server — see tests/conftest.py."
+            "Set WOMBAT_TEST_DATABASE_URL to a reachable Postgres server — see tests/conftest.py."
         )
 
     repo_root = Path(__file__).resolve().parent.parent
     server_url = make_url(server_dsn)
-    db_name = f"wafpass_test_{uuid.uuid4().hex[:16]}"
+    db_name = f"wombat_test_{uuid.uuid4().hex[:16]}"
     maintenance_db = server_url.database or "postgres"
 
     def _connect_kwargs(database: str) -> dict:
@@ -1850,8 +1850,8 @@ async def test_sso_holding_only_existing_user_login_audit_does_not_crash(
         mandant_id=None, holding_role="holding_admin",
     )
 
-    from wafpass_server.routers.auth import _audit
-    from wafpass_server.routers.sso import _provision_user
+    from wombat_server.routers.auth import _audit
+    from wombat_server.routers.sso import _provision_user
 
     async with mandant_db.app_sessionmaker() as session:
         user = await _provision_user(
@@ -2042,7 +2042,7 @@ async def test_update_notifications_reach_admins_in_every_mandate(mandant_db: Ma
     # A holding-only admin: no mandate of their own, covered by bypass only.
     await seed_user(mandant_db, username="holdy2", role="admin", holding_role="holding_admin")
 
-    from wafpass_server.update_checker import _send_update_notifications
+    from wombat_server.update_checker import _send_update_notifications
     await _send_update_notifications("Framework updated: abc1234 -> def5678")
 
     count = await fetch_scalar(
@@ -2064,7 +2064,7 @@ async def test_update_notifications_single_tenant_mode_unaffected(mandant_db: Ma
     fix existed — one global notification, no mandate tag."""
     await seed_user(mandant_db, username="admin1", role="admin")
 
-    from wafpass_server.update_checker import _send_update_notifications
+    from wombat_server.update_checker import _send_update_notifications
     await _send_update_notifications("Framework updated: abc1234 -> def5678")
 
     count = await fetch_scalar(
@@ -2329,8 +2329,8 @@ async def test_demo_run_tagged_with_effective_mandant(
     r = await app_client.post(
         "/api/v1/sandbox/demo-run", headers=bearer(clevel_id, "demoer", "clevel")
     )
-    if r.status_code == 503 and "wafpass-core is not installed" in r.json().get("detail", ""):
-        pytest.skip("wafpass-core is not installed; demo-run integration skipped")
+    if r.status_code == 503 and "wombat-core is not installed" in r.json().get("detail", ""):
+        pytest.skip("wombat-core is not installed; demo-run integration skipped")
     assert r.status_code == 201, r.text
 
     run = r.json()["data"]

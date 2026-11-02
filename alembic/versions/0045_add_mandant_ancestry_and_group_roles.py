@@ -13,7 +13,7 @@ Two independent things happen here:
    already includes X itself — both the RLS policy below and
    ``admin.py``'s rollup endpoint rely on that. Backfilled once, here,
    from today's ``parent_id`` data. Kept in sync going forward by
-   application code (``wafpass_server.mandant_ancestry.
+   application code (``wombat_server.mandant_ancestry.
    recompute_mandant_ancestry()``, called from ``admin.py``'s create/
    update mandant handlers) rather than a database trigger — ADR-004's
    "Migration" section offers this explicitly as an alternative to a

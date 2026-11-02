@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from wafpass.attestation import (
+from wombat.attestation import (
     compute_run_hash,
     generate_signing_key,
     sign_revocation_list,
@@ -20,10 +20,10 @@ from wafpass.attestation import (
     verify_revocation_list,
     verify_server_signature,
 )
-from wafpass.schema import WafpassResultSchema
+from wombat.schema import WombatResultSchema
 
-from wafpass_server.routers.validations import _map_status
-from wafpass_server.validation_service import ValidationService
+from wombat_server.routers.validations import _map_status
+from wombat_server.validation_service import ValidationService
 
 
 @pytest.fixture
@@ -39,8 +39,8 @@ def org_key(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def sample_result() -> WafpassResultSchema:
-    return WafpassResultSchema(
+def sample_result() -> WombatResultSchema:
+    return WombatResultSchema(
         project="demo",
         branch="main",
         git_sha="abc1234",
@@ -69,7 +69,7 @@ def test_service_reuses_persisted_keys(tmp_path: Path) -> None:
 def test_countersign_produces_verifiable_signature(
     service: ValidationService,
     org_key: Path,
-    sample_result: WafpassResultSchema,
+    sample_result: WombatResultSchema,
 ) -> None:
     attestation = sign_run(sample_result, org_key)
     ok, reason = service.verify_local_attestation(sample_result, attestation)
@@ -78,7 +78,7 @@ def test_countersign_produces_verifiable_signature(
     canonical_hash = attestation.canonical_hash
     server_validation = service.countersign(
         canonical_hash=canonical_hash,
-        base_url="https://wafpass.example.com",
+        base_url="https://wombat.example.com",
         validation_id="test-id-123",
     )
 
@@ -89,7 +89,7 @@ def test_countersign_produces_verifiable_signature(
 def test_certificate_chain_verifies(service: ValidationService) -> None:
     server_validation = service.countersign(
         canonical_hash="any-hash",
-        base_url="https://wafpass.example.com",
+        base_url="https://wombat.example.com",
         validation_id="test-id-123",
     )
     root_cert = server_validation.certificate_chain[-1]
@@ -100,9 +100,9 @@ def test_certificate_chain_verifies(service: ValidationService) -> None:
 def test_verify_envelope_against_root_cert(
     service: ValidationService,
     org_key: Path,
-    sample_result: WafpassResultSchema,
+    sample_result: WombatResultSchema,
 ) -> None:
-    from wafpass.schema import (
+    from wombat.schema import (
         LocalAttestationSchema,
         ServerValidationSchema,
         ValidationEnvelopeSchema,
@@ -111,7 +111,7 @@ def test_verify_envelope_against_root_cert(
     local = sign_run(sample_result, org_key)
     server_validation = service.countersign(
         canonical_hash=local.canonical_hash,
-        base_url="https://wafpass.example.com",
+        base_url="https://wombat.example.com",
         validation_id="test-id-123",
     )
     envelope = ValidationEnvelopeSchema(
@@ -130,7 +130,7 @@ def test_verify_envelope_against_root_cert(
 def test_tampered_result_fails_local_verification(
     service: ValidationService,
     org_key: Path,
-    sample_result: WafpassResultSchema,
+    sample_result: WombatResultSchema,
 ) -> None:
     attestation = sign_run(sample_result, org_key)
     tampered = sample_result.model_dump()
