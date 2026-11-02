@@ -7,8 +7,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import pool
 
-from wafpass_server.database import Base
-from wafpass_server import models as _models  # noqa: F401 – ensure models are registered
+from wombat_server.database import Base
+from wombat_server import models as _models  # noqa: F401 – ensure models are registered
 
 config = context.config
 if config.config_file_name is not None:

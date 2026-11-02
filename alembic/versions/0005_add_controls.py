@@ -35,7 +35,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
-        sa.Column("source", sa.Text, nullable=False, server_default="wafpass"),
+        sa.Column("source", sa.Text, nullable=False, server_default="wombat"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

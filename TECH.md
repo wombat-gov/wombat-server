@@ -1,8 +1,8 @@
-# wafpass-server — Technical Reference
+# wombat-server — Technical Reference
 
-This document covers internal architecture, design decisions, technical debt, and contribution guidance for `wafpass-server`. For user-facing documentation see `README.md`.
+This document covers internal architecture, design decisions, technical debt, and contribution guidance for `wombat-server`. For user-facing documentation see `README.md`.
 
-> **BREAKING CHANGE:** All API routes are now mounted under `/api/v1`. Router prefixes in `wafpass_server/routers/*.py` remain unchanged (e.g. `/auth`, `/runs`); `main.py` adds the `/api/v1` mount prefix. `/health`, `/version`, and `/framework-update-info.yml` stay at the root.
+> **BREAKING CHANGE:** All API routes are now mounted under `/api/v1`. Router prefixes in `wombat_server/routers/*.py` remain unchanged (e.g. `/auth`, `/runs`); `main.py` adds the `/api/v1` mount prefix. `/health`, `/version`, and `/framework-update-info.yml` stay at the root.
 
 ---
 
@@ -10,7 +10,7 @@ This document covers internal architecture, design decisions, technical debt, an
 
 ```
 wafpass-server/
-├── wafpass_server/
+├── wombat_server/
 │   ├── main.py          # FastAPI app factory, middleware, router registration under /api/v1, /health, startup seeding
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
@@ -167,14 +167,14 @@ IdP authentication page  (IdP binds nonce into id_token)
     │  302 redirect back  ?code=…&state=…
     ▼
 GET /auth/oidc/callback
-    ├─ verify JWT state (signed with WAFPASS_JWT_SECRET, 10 min TTL) → extract nonce
+    ├─ verify JWT state (signed with WOMBAT_JWT_SECRET, 10 min TTL) → extract nonce
     ├─ POST token_endpoint  →  id_token + access_token
     ├─ fetch JWKS from discovery["jwks_uri"]
     ├─ verify id_token signature (RS256/EC) using IdP public key
     ├─ validate aud == client_id and nonce claim matches state nonce
     │  (returns sso_error=token_verification_failed on any mismatch)
     ├─ provision/update User row (auth_provider="oidc")
-    └─ issue WAF++ JWT + refresh token
+    └─ issue Wombat JWT + refresh token
     │  302 redirect  {frontend_url}?sso_ok=1&at=…&rt=…&u=BASE64_USER
     ▼
 Dashboard: AuthContext detects sso_ok=1 query param on mount → stores tokens
@@ -194,7 +194,7 @@ routers/sso.py
     ├─ python3-saml process_response()  ──▶  validate XML signature with IdP cert
     ├─ extract NameID + configured attributes
     ├─ provision/update User row (auth_provider="saml2")
-    └─ issue WAF++ JWT + refresh token
+    └─ issue Wombat JWT + refresh token
     │  302 redirect  {frontend_url}?sso_ok=1&at=…&rt=…&u=BASE64_USER
     ▼
 Dashboard: AuthContext detects sso_ok=1 query param on mount → stores tokens
@@ -227,17 +227,17 @@ SSO provider settings are stored in the `sso_configs` table (one row per provide
 
 Sensitive values (OIDC `client_secret`, SAML2 `sp_private_key`) are encrypted at rest before being written to the database by `secret_enc.py`. Three backends are supported:
 
-| Backend | `WAFPASS_SECRETS_BACKEND` | Key source |
+| Backend | `WOMBAT_SECRETS_BACKEND` | Key source |
 |---------|--------------------------|-----------|
-| Local Fernet (default) | `local` | `WAFPASS_ENCRYPTION_KEY` (32-byte base64 or passphrase → PBKDF2) |
+| Local Fernet (default) | `local` | `WOMBAT_ENCRYPTION_KEY` (32-byte base64 or passphrase → PBKDF2) |
 | AWS Secrets Manager | `aws_sm` | ARN stored in DB; secret value in AWS |
 | HashiCorp Vault Transit | `vault_transit` | Opaque ciphertext in DB; Vault holds the key |
 
-In non-local environments (`WAFPASS_ENV != local`) the server refuses to start unless `WAFPASS_ENCRYPTION_KEY` is explicitly set — falling back to derivation from `WAFPASS_JWT_SECRET` is blocked by a startup validator in `config.py`.
+In non-local environments (`WOMBAT_ENV != local`) the server refuses to start unless `WOMBAT_ENCRYPTION_KEY` is explicitly set — falling back to derivation from `WOMBAT_JWT_SECRET` is blocked by a startup validator in `config.py`.
 
 ### Machine-to-machine (CI/CD)
 
-`require_ingest` on `POST /api/v1/runs` and `POST /api/v1/scan` accepts **either** a valid Bearer JWT **or** the `X-Api-Key` header matching `WAFPASS_API_KEY`. This lets `wafpass check --push` work from CI pipelines without a user account.
+`require_ingest` on `POST /api/v1/runs` and `POST /api/v1/scan` accepts **either** a valid Bearer JWT **or** the `X-Api-Key` header matching `WOMBAT_API_KEY`. This lets `wombat check --push` work from CI pipelines without a user account.
 
 ### Provider abstraction
 
@@ -245,7 +245,7 @@ In non-local environments (`WAFPASS_ENV != local`) the server refuses to start u
 
 ### Bootstrap admin seeding
 
-On startup, if `WAFPASS_ADMIN_PASSWORD` is set and the `users` table is empty, the server creates one admin user. This runs exactly once — subsequent restarts skip it because the table is no longer empty.
+On startup, if `WOMBAT_ADMIN_PASSWORD` is set and the `users` table is empty, the server creates one admin user. This runs exactly once — subsequent restarts skip it because the table is no longer empty.
 
 ---
 
@@ -382,7 +382,7 @@ evidence
 └── created_at     TIMESTAMPTZ  server_default=now()
 ```
 
-**QR code generation:** Requires the optional `segno` library (`pip install segno`). If unavailable, a plain SVG placeholder is returned. The QR code URL embeds `WAFPASS_PUBLIC_URL` (from env) as the base; falls back to the incoming request's `X-Forwarded-Proto` / `X-Forwarded-Host` headers.
+**QR code generation:** Requires the optional `segno` library (`pip install segno`). If unavailable, a plain SVG placeholder is returned. The QR code URL embeds `WOMBAT_PUBLIC_URL` (from env) as the base; falls back to the incoming request's `X-Forwarded-Proto` / `X-Forwarded-Host` headers.
 
 ### ProjectPassport
 
@@ -511,23 +511,23 @@ This allows pagination metadata without breaking the response contract when `dat
 
 ### Sandbox: lazy import + temp directory
 
-The sandbox router avoids importing `wafpass-core` at startup:
+The sandbox router avoids importing `wombat-core` at startup:
 
 ```python
-_wafpass_available: bool | None = None
+_wombat_available: bool | None = None
 
-def _check_wafpass() -> bool:
-    global _wafpass_available
-    if _wafpass_available is None:
+def _check_wombat() -> bool:
+    global _wombat_available
+    if _wombat_available is None:
         try:
-            import wafpass.engine  # noqa: F401
-            _wafpass_available = True
+            import wombat.engine  # noqa: F401
+            _wombat_available = True
         except ImportError:
-            _wafpass_available = False
-    return _wafpass_available
+            _wombat_available = False
+    return _wombat_available
 ```
 
-This lets the server start cleanly even when `wafpass-core` is not installed — all other endpoints work normally. The sandbox router checks availability on every request and returns `503` if unavailable.
+This lets the server start cleanly even when `wombat-core` is not installed — all other endpoints work normally. The sandbox router checks availability on every request and returns `503` if unavailable.
 
 HCL evaluation uses a temporary directory:
 
@@ -551,20 +551,20 @@ Uses `pydantic-settings` to read environment variables:
 ```python
 class Settings(BaseSettings):
     database_url: str
-    wafpass_env: str = "local"
+    wombat_env: str = "local"
     cors_origins: str = "http://localhost:3000"
-    wafpass_controls_dir: str = "controls"
-    wafpass_jwt_secret: str = _DEFAULT_JWT_SECRET
-    wafpass_encryption_key: str = ""
+    wombat_controls_dir: str = "controls"
+    wombat_jwt_secret: str = _DEFAULT_JWT_SECRET
+    wombat_encryption_key: str = ""
 
     @model_validator(mode="after")
     def _require_non_default_secrets_in_production(self) -> "Settings":
-        if self.wafpass_env == "local":
+        if self.wombat_env == "local":
             return self
-        if self.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
-            raise ValueError("WAFPASS_JWT_SECRET must be changed from the default value.")
-        if not self.wafpass_encryption_key:
-            raise ValueError("WAFPASS_ENCRYPTION_KEY must be set in non-local environments.")
+        if self.wombat_jwt_secret == _DEFAULT_JWT_SECRET:
+            raise ValueError("WOMBAT_JWT_SECRET must be changed from the default value.")
+        if not self.wombat_encryption_key:
+            raise ValueError("WOMBAT_ENCRYPTION_KEY must be set in non-local environments.")
         return self
 
     @property
@@ -576,7 +576,7 @@ settings = Settings()  # Module-level singleton, read once at startup
 
 All environment variables are read once at process start. There is no hot-reload of configuration.
 
-**Startup enforcement:** When `WAFPASS_ENV` is anything other than `local`, the `model_validator` aborts startup (raises `ValidationError`) if `WAFPASS_JWT_SECRET` is still the shipped default or `WAFPASS_ENCRYPTION_KEY` is unset. Local development is unaffected.
+**Startup enforcement:** When `WOMBAT_ENV` is anything other than `local`, the `model_validator` aborts startup (raises `ValidationError`) if `WOMBAT_JWT_SECRET` is still the shipped default or `WOMBAT_ENCRYPTION_KEY` is unset. Local development is unaffected.
 
 **`.env.example`** (in the `wafpass-server/` directory) documents all variables with their defaults and usage notes. Copy it to `.env` for local development:
 
@@ -610,19 +610,19 @@ with connectable.connect() as connection:
 
 ## Docker build
 
-The Dockerfile uses the **monorepo root** as build context (not `wafpass-server/`) because it needs to COPY `pass/` to install `wafpass-core`:
+The Dockerfile uses the **monorepo root** as build context (not `wafpass-server/`) because it needs to COPY `pass/` to install `wombat-core`:
 
 ```dockerfile
 # Build context: repo root (.)
-COPY pass/ /tmp/wafpass-core/
-RUN pip install --no-cache-dir /tmp/wafpass-core && rm -rf /tmp/wafpass-core
+COPY pass/ /tmp/wombat-core/
+RUN pip install --no-cache-dir /tmp/wombat-core && rm -rf /tmp/wombat-core
 
 # Controls YAMLs must be copied separately — they're data, not installed by pip
 COPY pass/controls/ /app/controls/
-ENV WAFPASS_CONTROLS_DIR=/app/controls
+ENV WOMBAT_CONTROLS_DIR=/app/controls
 ```
 
-`pass/controls/` was initially forgotten after the pip install deleted `/tmp/wafpass-core/`. The separate `COPY pass/controls/` step was added in v0.4.0 to fix the sandbox router.
+`pass/controls/` was initially forgotten after the pip install deleted `/tmp/wombat-core/`. The separate `COPY pass/controls/` step was added in v0.4.0 to fix the sandbox router.
 
 ---
 
@@ -643,10 +643,10 @@ pip install -e ".[dev]"
 pytest
 
 # Check types
-mypy wafpass_server/
+mypy wombat_server/
 
 # Lint
-ruff check wafpass_server/
+ruff check wombat_server/
 ```
 
 ### Adding a new endpoint
