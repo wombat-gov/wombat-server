@@ -49,7 +49,7 @@ _FRAMEWORK_UPDATE_INFO_PATH = os.environ.get(
 
 app = FastAPI(
     title="wombat-server",
-    version="1.0.0",
+    version="1.2.0",
     description="REST API for persisting and querying WOMBATpass scan results.",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",

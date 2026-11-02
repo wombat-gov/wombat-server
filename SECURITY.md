@@ -24,7 +24,7 @@ If you discover a security vulnerability in `wombat-server`, please report it pr
 
 Options:
 
-- Open a [GitHub Security Advisory](https://github.com/WAF2p/wafpass-server/security/advisories/new) if private vulnerability reporting is enabled for the repository.
+- Open a [GitHub Security Advisory](https://github.com/wombat-gov/wombat-server/security/advisories/new) if private vulnerability reporting is enabled for the repository.
 - Otherwise, send a direct message to one of the maintainers listed in `pyproject.toml` under `authors`.
 
 Please include:
@@ -52,7 +52,7 @@ The following are in scope for vulnerability reports:
 Out of scope:
 
 - The `wombat` CLI / `wombat-core` scanning engine (report in the `pass` repository)
-- The `wombat-dashboard` React UI (report in the `wafpass-dashboard` repository)
+- The `wombat-dashboard` React UI (report in the `wombat-dashboard` repository)
 - Generic dependency vulnerabilities unless they are exploitable through this server's own code
 
 ---

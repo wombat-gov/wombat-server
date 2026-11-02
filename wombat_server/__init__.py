@@ -7,4 +7,4 @@ except PackageNotFoundError:
         # Deprecated: published as wafpass-server before the rebrand.
         __version__ = _pkg_version("wafpass-server")
     except PackageNotFoundError:
-        __version__ = "0.4.0"
+        __version__ = "1.2.0"
