@@ -1608,10 +1608,25 @@ async def test_migration_0045_retrofits_already_activated_instance_policies() ->
             # policy whenever instance_mode == 'multi_mandant' — a partial
             # activation (e.g. only `runs`) can't actually occur in
             # practice and would make this test exercise an unreal state.
-            not_null_tables = [t for t in ALL_TENANT_TABLES if t not in ("users", "user_audit_logs", "validations")]
+            # Only tables that already had a mandant_id column at 0044 took
+            # part in that era's activation. `sso_configs` joined
+            # ALL_TENANT_TABLES later (ADR-005 / revision 0048), so applying
+            # the old policy shape to it here would fail on a missing column.
+            existing_mandant_tables = {
+                row["table_name"]
+                for row in await conn.fetch(
+                    "SELECT table_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND column_name = 'mandant_id'"
+                )
+            }
+            tenant_tables = [t for t in ALL_TENANT_TABLES if t in existing_mandant_tables]
+            not_null_tables = [
+                t for t in tenant_tables
+                if t not in ("users", "user_audit_logs", "validations")
+            ]
             for t in not_null_tables:
                 await conn.execute(f'ALTER TABLE "{t}" ALTER COLUMN mandant_id SET NOT NULL')
-            for t in ALL_TENANT_TABLES:
+            for t in tenant_tables:
                 await conn.execute(f'ALTER TABLE "{t}" ENABLE ROW LEVEL SECURITY')
                 await conn.execute(f'ALTER TABLE "{t}" FORCE ROW LEVEL SECURITY')
                 await conn.execute(_old_policy_sql(t))
@@ -2434,8 +2449,10 @@ async def test_user_group_endpoints_cannot_touch_users_in_other_mandates(
 async def test_pipelines_metrics_and_trends_respect_group_role_bypass(
     mandant_db: MandantTestDb, app_client,
 ) -> None:
-    """group_admin with a base role below 'admin' sees the projects mapped to
-    their groups, not every project in their mandate subtree."""
+    """group_admin with a base role below 'admin' is not clawed back by the
+    UserGroup/ProjectGroup filter: RLS already scopes them to their mandate
+    subtree, so ``bypasses_group_scoping()`` must leave that visibility intact
+    even though only one of the projects is mapped to their group."""
     admin_id = await seed_user(mandant_db, username="admin1", role="admin")
     await activate(app_client, bearer(admin_id, "admin1", "admin"))
     holdy_id = await seed_user(mandant_db, username="holdy", role="admin", holding_role="holding_admin")
@@ -2475,26 +2492,36 @@ async def test_pipelines_metrics_and_trends_respect_group_role_bypass(
     async with mandant_db.owner_sessionmaker() as session:
         await session.execute(
             text(
-                "INSERT INTO project_groups (project, group_name, mandant_id) VALUES (:project, :group, :mandant_id)"
+                "INSERT INTO project_groups (id, project, group_name, mandant_id) "
+                "VALUES (:id, :project, :group, :mandant_id)"
             ),
-            {"project": "group-proj", "group": "eng", "mandant_id": sub_a_id},
+            {
+                "id": uuid.uuid4(),
+                "project": "group-proj",
+                "group": "eng",
+                "mandant_id": sub_a_id,
+            },
         )
         await session.execute(
-            text("INSERT INTO user_groups (user_id, group_name, provider) VALUES (:user_id, :group, 'local')"),
-            {"user_id": group_admin_id, "group": "eng"},
+            text(
+                "INSERT INTO user_groups (id, user_id, group_name, provider) "
+                "VALUES (:id, :user_id, :group, 'local')"
+            ),
+            {"id": uuid.uuid4(), "user_id": group_admin_id, "group": "eng"},
         )
         await session.commit()
 
     r = await app_client.get("/api/v1/pipelines/metrics", headers=group_headers)
     assert r.status_code == 200, r.text
-    projects = [p["project"] for p in r.json()["data"]["projectsList"]]
-    assert "group-proj" in projects
-    assert "other-proj" not in projects
+    projects = {p["project"] for p in r.json()["data"]["projectsList"]}
+    # RLS already limits the group_admin to Sub A and its descendants, so the
+    # application-level group filter must not narrow them any further.
+    assert projects == {"group-proj", "other-proj"}
 
     r = await app_client.get("/api/v1/pipelines/trends", headers=group_headers)
     assert r.status_code == 200, r.text
     total = sum(day["count"] for day in r.json()["data"]["runsByDay"])
-    assert total == 1
+    assert total == 2
 
 
 @pytest.mark.asyncio

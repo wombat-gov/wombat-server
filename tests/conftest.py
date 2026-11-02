@@ -30,6 +30,9 @@ import os
 # Must be set before any `wombat_server.*` import below triggers
 # Settings() validation — see config.py, which rejects its own default.
 os.environ.setdefault("WOMBAT_JWT_SECRET", "test-only-secret-not-for-any-real-deployment-at-all")
+# Minimal control catalogue for sandbox/demo-run tests. The repo has no
+# checked-in `controls/` directory, so without this the endpoint returns 503.
+os.environ.setdefault("WOMBAT_CONTROLS_DIR", os.path.join(os.path.dirname(__file__), "controls"))
 
 import asyncio
 import uuid
