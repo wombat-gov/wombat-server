@@ -159,18 +159,24 @@ async def adopt_mandate_of(
     db._wombat_adopted_is_holding_viewer = "true" if is_holding_viewer else "false"  # type: ignore[attr-defined]
 
     async def _reapply() -> None:
-        await db.execute(
-            text(
-                "SELECT set_config('app.current_mandant_id', :v, true), "
-                "set_config('app.is_holding_admin', :ha, true), "
-                "set_config('app.is_holding_viewer', :hv, true)"
-            ),
-            {
-                "v": getattr(db, "_wombat_adopted_mandate_id", ""),
-                "ha": getattr(db, "_wombat_adopted_is_holding_admin", "false"),
-                "hv": getattr(db, "_wombat_adopted_is_holding_viewer", "false"),
-            },
-        )
+        # Applying the GUCs must not flush pending ORM changes.  An autoflush
+        # here would run under the *previous* RLS context — the exact reason
+        # this function is being called — and be rejected by a tenant table's
+        # WITH CHECK (e.g. _provision_user() assigns user.mandant_id just
+        # before adopting the mandate).
+        with db.no_autoflush:
+            await db.execute(
+                text(
+                    "SELECT set_config('app.current_mandant_id', :v, true), "
+                    "set_config('app.is_holding_admin', :ha, true), "
+                    "set_config('app.is_holding_viewer', :hv, true)"
+                ),
+                {
+                    "v": getattr(db, "_wombat_adopted_mandate_id", ""),
+                    "ha": getattr(db, "_wombat_adopted_is_holding_admin", "false"),
+                    "hv": getattr(db, "_wombat_adopted_is_holding_viewer", "false"),
+                },
+            )
 
     if not getattr(db, "_wombat_adopt_wrapped", False):
         original_commit = db.commit

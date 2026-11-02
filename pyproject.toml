@@ -80,6 +80,9 @@ packages = ["wombat_server", "wafpass_server"]
 testpaths = ["tests"]
 addopts = "-v"
 asyncio_mode = "auto"
+# Explicit default: pytest-asyncio warns (and will change the default) when
+# this is unset. Fixtures are function-scoped throughout this suite anyway.
+asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [

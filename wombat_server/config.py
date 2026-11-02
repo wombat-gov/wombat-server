@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
     wombat_api_key: str = ""
 
+    # In multi-mandant mode the legacy shared key has no natural mandate, so
+    # it is rejected unless an operator explicitly maps it to one via this
+    # mandant slug. Empty = reject the legacy shared key after activation.
+    wombat_legacy_api_key_mandant_slug: str = ""
+
     # Public base URL used to build absolute links in QR codes and audit reports.
     # Set this to the externally reachable address of the server, e.g.
     # https://wombat.example.com  (no trailing slash).

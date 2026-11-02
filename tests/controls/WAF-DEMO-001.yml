@@ -1,0 +1,25 @@
+id: WAF-DEMO-001
+title: S3 public access block must block public ACLs
+status: active
+pillar: security
+severity: high
+category: security
+rationale: The sandbox demo intentionally ships a public S3 bucket, so this
+  control gives run_controls() something real to evaluate.
+checks:
+- id: waf-demo-001.tf.aws.public-access-block
+  engine: terraform
+  provider: aws
+  automated: true
+  title: S3 public access block must block public ACLs
+  severity: high
+  scope:
+    block_type: resource
+    resource_types:
+    - aws_s3_bucket_public_access_block
+  assertions:
+  - attribute: block_public_acls
+    op: equals
+    expected: true
+    message: Public ACLs must be blocked on S3 buckets.
+  on_fail: violation

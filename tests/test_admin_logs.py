@@ -7,73 +7,69 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from wombat_server.models import SyslogConfig, User, UserAuditLog
+from tests.conftest import MandantTestDb
+from tests.test_mandants import bearer, seed_user
+from wombat_server.models import SyslogConfig, UserAuditLog
 from wombat_server.syslog import build_syslog_message
 
 
-async def _seed_admin_user(db: AsyncSession, role: str = "admin") -> User:
-    user = User(
-        id=uuid.uuid4(),
-        username=f"{role}-tester",
-        display_name="Test",
-        role=role,
-        auth_provider="local",
-        password_hash="x",
-    )
-    db.add(user)
-    await db.commit()
-    return user
-
-
-async def _seed_log(db: AsyncSession, actor: User | None, action: str) -> UserAuditLog:
-    log = UserAuditLog(
-        id=uuid.uuid4(),
-        actor_id=actor.id if actor else None,
-        action=action,
-        detail={"foo": "bar"},
-        ip="127.0.0.1",
-        timestamp=datetime.now(timezone.utc),
-    )
-    db.add(log)
-    await db.commit()
-    return log
+async def _seed_log(mandant_db: MandantTestDb, actor_id: uuid.UUID, action: str) -> None:
+    async with mandant_db.owner_sessionmaker() as session:
+        session.add(
+            UserAuditLog(
+                id=uuid.uuid4(),
+                actor_id=actor_id,
+                action=action,
+                detail={"foo": "bar"},
+                ip="127.0.0.1",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
 
 
 @pytest.mark.asyncio
-async def test_admin_logs_require_admin(app_client: AsyncClient, db: AsyncSession) -> None:
-    user = await _seed_admin_user(db, role="engineer")
-    app_client.headers["Authorization"] = f"Bearer {user.username}"
-    resp = await app_client.get("/api/v1/admin/logs")
+async def test_admin_logs_require_admin(
+    mandant_db: MandantTestDb, app_client: AsyncClient
+) -> None:
+    user_id = await seed_user(mandant_db, username="engineer-tester", role="engineer")
+    resp = await app_client.get(
+        "/api/v1/admin/logs",
+        headers=bearer(user_id, "engineer-tester", "engineer"),
+    )
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_admin_logs_lists_events(app_client: AsyncClient, db: AsyncSession) -> None:
-    admin = await _seed_admin_user(db, role="admin")
-    app_client.headers["Authorization"] = f"Bearer {admin.username}"
-    await _seed_log(db, admin, "login")
-    await _seed_log(db, admin, "user.create")
+async def test_admin_logs_lists_events(
+    mandant_db: MandantTestDb, app_client: AsyncClient
+) -> None:
+    admin_id = await seed_user(mandant_db, username="admin-tester", role="admin")
+    headers = bearer(admin_id, "admin-tester", "admin")
+    await _seed_log(mandant_db, admin_id, "login")
+    await _seed_log(mandant_db, admin_id, "user.create")
 
-    resp = await app_client.get("/api/v1/admin/logs")
+    resp = await app_client.get("/api/v1/admin/logs", headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()["data"]
     assert len(data) == 2
     actions = {e["action"] for e in data}
     assert actions == {"login", "user.create"}
     # actor username resolved
-    assert data[0]["actor_username"] == admin.username
+    assert data[0]["actor_username"] == "admin-tester"
 
 
 @pytest.mark.asyncio
-async def test_admin_logs_action_filter(app_client: AsyncClient, db: AsyncSession) -> None:
-    admin = await _seed_admin_user(db, role="admin")
-    app_client.headers["Authorization"] = f"Bearer {admin.username}"
-    await _seed_log(db, admin, "login")
-    await _seed_log(db, admin, "logout")
+async def test_admin_logs_action_filter(
+    mandant_db: MandantTestDb, app_client: AsyncClient
+) -> None:
+    admin_id = await seed_user(mandant_db, username="admin-tester", role="admin")
+    headers = bearer(admin_id, "admin-tester", "admin")
+    await _seed_log(mandant_db, admin_id, "login")
+    await _seed_log(mandant_db, admin_id, "logout")
 
-    resp = await app_client.get("/api/v1/admin/logs?action=login")
+    resp = await app_client.get("/api/v1/admin/logs?action=login", headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()["data"]
     assert len(data) == 1
@@ -81,31 +77,35 @@ async def test_admin_logs_action_filter(app_client: AsyncClient, db: AsyncSessio
 
 
 @pytest.mark.asyncio
-async def test_admin_logs_limit(app_client: AsyncClient, db: AsyncSession) -> None:
-    admin = await _seed_admin_user(db, role="admin")
-    app_client.headers["Authorization"] = f"Bearer {admin.username}"
+async def test_admin_logs_limit(mandant_db: MandantTestDb, app_client: AsyncClient) -> None:
+    admin_id = await seed_user(mandant_db, username="admin-tester", role="admin")
+    headers = bearer(admin_id, "admin-tester", "admin")
     for _ in range(5):
-        await _seed_log(db, admin, "login")
+        await _seed_log(mandant_db, admin_id, "login")
 
-    resp = await app_client.get("/api/v1/admin/logs?limit=2")
+    resp = await app_client.get("/api/v1/admin/logs?limit=2", headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     assert len(resp.json()["data"]) == 2
 
 
 @pytest.mark.asyncio
-async def test_syslog_config_requires_admin(app_client: AsyncClient, db: AsyncSession) -> None:
-    user = await _seed_admin_user(db, role="engineer")
-    app_client.headers["Authorization"] = f"Bearer {user.username}"
-    resp = await app_client.get("/api/v1/admin/syslog-config")
+async def test_syslog_config_requires_admin(
+    mandant_db: MandantTestDb, app_client: AsyncClient
+) -> None:
+    user_id = await seed_user(mandant_db, username="engineer-tester", role="engineer")
+    resp = await app_client.get(
+        "/api/v1/admin/syslog-config",
+        headers=bearer(user_id, "engineer-tester", "engineer"),
+    )
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_syslog_config_crud(app_client: AsyncClient, db: AsyncSession) -> None:
-    admin = await _seed_admin_user(db, role="admin")
-    app_client.headers["Authorization"] = f"Bearer {admin.username}"
+async def test_syslog_config_crud(mandant_db: MandantTestDb, app_client: AsyncClient) -> None:
+    admin_id = await seed_user(mandant_db, username="admin-tester", role="admin")
+    headers = bearer(admin_id, "admin-tester", "admin")
 
-    resp = await app_client.get("/api/v1/admin/syslog-config")
+    resp = await app_client.get("/api/v1/admin/syslog-config", headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()["data"]
     assert data["enabled"] is False
@@ -122,7 +122,7 @@ async def test_syslog_config_crud(app_client: AsyncClient, db: AsyncSession) -> 
         "program_tag": "wombat-admin",
         "severity_overrides": {"login_success": 3},
     }
-    resp = await app_client.put("/api/v1/admin/syslog-config", json=payload)
+    resp = await app_client.put("/api/v1/admin/syslog-config", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()["data"]
     assert data["enabled"] is True
@@ -131,15 +131,19 @@ async def test_syslog_config_crud(app_client: AsyncClient, db: AsyncSession) -> 
     assert data["tls_enabled"] is True
     assert data["severity_overrides"] == {"login_success": 3}
 
-    resp = await app_client.get("/api/v1/admin/syslog-config")
+    resp = await app_client.get("/api/v1/admin/syslog-config", headers=headers)
     assert resp.json()["data"]["host"] == "syslog.example.com"
 
 
 @pytest.mark.asyncio
-async def test_syslog_config_test_endpoint_no_host(app_client: AsyncClient, db: AsyncSession) -> None:
-    admin = await _seed_admin_user(db, role="admin")
-    app_client.headers["Authorization"] = f"Bearer {admin.username}"
-    resp = await app_client.post("/api/v1/admin/syslog-config/test")
+async def test_syslog_config_test_endpoint_no_host(
+    mandant_db: MandantTestDb, app_client: AsyncClient
+) -> None:
+    admin_id = await seed_user(mandant_db, username="admin-tester", role="admin")
+    resp = await app_client.post(
+        "/api/v1/admin/syslog-config/test",
+        headers=bearer(admin_id, "admin-tester", "admin"),
+    )
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json()["data"]["success"] is False
 
