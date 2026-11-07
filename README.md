@@ -68,6 +68,11 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 | `WOMBAT_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
 | `WOMBAT_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
 | `WOMBAT_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /api/v1/runs` / `POST /api/v1/scan` |
+| `WOMBAT_PUBLIC_URL` | *(request host)* | Externally reachable base URL for links/QR codes and the device approval page |
+| `WOMBAT_DEVICE_AUTH_ENABLED` | `true` | Enable browser-approved desktop device tokens (`/auth/device/*`) |
+| `WOMBAT_DEVICE_CODE_TTL_SECONDS` | `600` | Device approval code lifetime |
+| `WOMBAT_DEVICE_POLL_INTERVAL` | `5` | Poll interval returned to the desktop app |
+| `WOMBAT_DASHBOARD_URL` | `WOMBAT_PUBLIC_URL` | Dashboard login URL used by the approval page |
 
 > **Local dev tip:** When running the dashboard dev server alongside the API, add `http://localhost:5173` to `CORS_ORIGINS` so Vite's dev server can reach the API without CORS errors.
 
@@ -150,6 +155,24 @@ wombat check ./infra --output json --upload-source | \
 
 ---
 
+### Desktop device authorization (Wave D)
+
+The Electron app can authenticate remote/SSO environments without browser
+cookies:
+
+1. `POST /api/v1/auth/device/start` returns a one-time `device_code`, a short
+   `user_code`, and a browser `verification_url` (10-minute expiry).
+2. The user signs in to the dashboard in the browser and approves the code at
+   the verification URL. The page is server-rendered and CSRF-protected.
+3. `POST /api/v1/auth/device/token` exchanges the approved code for an opaque
+   `wombat_dev_…` token. Only its SHA-256 hash is stored.
+4. The token is a `Bearer` credential (`get_current_user`) and is re-resolved
+   against the current user/role/mandate on every request. Revoke it with
+   `GET /api/v1/auth/devices` / `DELETE /api/v1/auth/devices/{id}`.
+
+The app stores the token with the OS keychain (Electron `safeStorage`) and
+injects it into its loopback API proxy for the active environment.
+
 ## API reference
 
 ### Authentication
@@ -164,6 +187,12 @@ wombat check ./infra --output json --upload-source | \
 | `POST` | `/api/v1/auth/users` | engineer | Create a user |
 | `PUT` | `/api/v1/auth/users/{id}` | engineer | Update user role / password / status |
 | `DELETE` | `/api/v1/auth/users/{id}` | engineer | Delete a user |
+| `POST` | `/api/v1/auth/device/start` | None | Start a desktop device authorization |
+| `GET` | `/api/v1/auth/device/verify` | Cookie | Browser approval page |
+| `POST` | `/api/v1/auth/device/approve` | Cookie + CSRF | Approve or deny a device code |
+| `POST` | `/api/v1/auth/device/token` | None | Exchange an approved code for a device token |
+| `GET` | `/api/v1/auth/devices` | Any | List the current user's devices |
+| `DELETE` | `/api/v1/auth/devices/{id}` | Any | Revoke one of the user's devices |
 
 ### SSO
 

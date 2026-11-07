@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wombat_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
+from wombat_server.events import publish_event
 from wombat_server.models import User, Waiver
 from wombat_server.schemas import Envelope, WaiverOut, WaiverUpsert
 
@@ -73,6 +74,11 @@ async def upsert_waiver(
         waiver = existing
     await db.commit()
     await db.refresh(waiver)
+    await publish_event(
+        "waiver.changed",
+        {"action": "upsert", "id": waiver.id, "project": waiver.project},
+        mandate_id=waiver.mandant_id,
+    )
     return Envelope(data=waiver)
 
 
@@ -86,5 +92,12 @@ async def delete_waiver(
     waiver = await _get_waiver(db, auth, waiver_id)
     if waiver is None:
         raise HTTPException(status_code=404, detail="Waiver not found")
+    project = waiver.project
+    mandate_id = waiver.mandant_id
     await db.delete(waiver)
     await db.commit()
+    await publish_event(
+        "waiver.changed",
+        {"action": "delete", "id": waiver_id, "project": project},
+        mandate_id=mandate_id,
+    )

@@ -27,6 +27,13 @@ _EXEMPT_PATHS = {
     "/api/v1/auth/logout",
     # MFA challenge carries a short-lived mfa_token, not ambient credentials.
     "/api/v1/auth/mfa/challenge",
+    # Device flow endpoints do not use ambient cookie credentials: the app
+    # is unauthenticated when it starts/polls, and the browser approval form
+    # performs its own double-submit check with a hidden field (browsers
+    # cannot set X-CSRF-Token on a plain form).
+    "/api/v1/auth/device/start",
+    "/api/v1/auth/device/token",
+    "/api/v1/auth/device/approve",
 }
 
 _LOCAL_ORIGIN_RE = re.compile(

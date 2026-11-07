@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wombat_server.auth.deps import IngestAuth, require_ingest, require_role
 from wombat_server.config import settings
 from wombat_server.database import get_db
+from wombat_server.events import publish_event
 from wombat_server.models import ApiKeyUsageLog, Run, User
 from wombat_server.path_safety import resolve_scan_path
 from wombat_server.schemas import Envelope, FindingSchema, RunSummary
@@ -209,5 +210,24 @@ async def trigger_scan(
             ip=client_ip,
         ))
         await db.commit()
+
+    await publish_event(
+        "run.created",
+        {
+            "id": str(run.id),
+            "project": run.project,
+            "branch": run.branch,
+            "score": run.score,
+            "stage": run.stage,
+            "created_at": run.created_at.isoformat(),
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        },
+        mandate_id=run.mandant_id,
+    )
+    await publish_event(
+        "scan.completed",
+        {"run_id": str(run.id), "project": run.project, "score": run.score},
+        mandate_id=run.mandant_id,
+    )
 
     return Envelope(data=RunSummary.model_validate(run, from_attributes=True))

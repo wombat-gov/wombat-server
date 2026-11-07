@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wombat_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
+from wombat_server.events import publish_event
 from wombat_server.models import RiskAcceptance, User
 from wombat_server.schemas import Envelope, RiskAcceptanceOut, RiskAcceptanceUpsert
 
@@ -81,6 +82,11 @@ async def upsert_risk(
         risk = existing
     await db.commit()
     await db.refresh(risk)
+    await publish_event(
+        "risk.changed",
+        {"action": "upsert", "id": risk.id, "project": risk.project},
+        mandate_id=risk.mandant_id,
+    )
     return Envelope(data=risk)
 
 
@@ -94,5 +100,12 @@ async def delete_risk(
     risk = await _get_risk(db, auth, risk_id)
     if risk is None:
         raise HTTPException(status_code=404, detail="Risk acceptance not found")
+    project = risk.project
+    mandate_id = risk.mandant_id
     await db.delete(risk)
     await db.commit()
+    await publish_event(
+        "risk.changed",
+        {"action": "delete", "id": risk_id, "project": project},
+        mandate_id=mandate_id,
+    )

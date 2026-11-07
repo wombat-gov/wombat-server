@@ -68,3 +68,15 @@ async def get_owner_connection() -> AsyncGenerator[AsyncConnection, None]:
     """
     async with _get_owner_engine().connect() as conn:
         yield conn
+
+
+@asynccontextmanager
+async def get_owner_session() -> AsyncGenerator[AsyncSession, None]:
+    """Owner/superuser ORM session for background workers (scan jobs).
+
+    The job worker must see queued jobs across every mandate, so it cannot use
+    the RLS-constrained runtime session. It never serves a request directly.
+    """
+    factory = async_sessionmaker(_get_owner_engine(), expire_on_commit=False)
+    async with factory() as session:
+        yield session

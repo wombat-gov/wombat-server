@@ -629,6 +629,11 @@ async def revoke_my_session(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
+    await adopt_mandate_of(
+        db, user.mandant_id,
+        is_holding_admin=user.holding_role == "holding_admin",
+        is_holding_viewer=user.holding_role == "holding_viewer",
+    )
     session = await db.get(Session, session_id)
     if session is None or session.user_id != user.id:
         raise HTTPException(404, detail="Session not found.")
@@ -647,6 +652,11 @@ async def revoke_other_sessions(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
     """Revoke every session except the one making this request."""
+    await adopt_mandate_of(
+        db, user.mandant_id,
+        is_holding_admin=user.holding_role == "holding_admin",
+        is_holding_viewer=user.holding_role == "holding_viewer",
+    )
     current = await current_family_id(db, request)
     count = await revoke_user_sessions(
         db, user.id, "sessions_revoked_all",

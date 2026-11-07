@@ -16,7 +16,7 @@ from wombat_server.auth.cookies import ACCESS_COOKIE
 from wombat_server.auth.jwt_utils import decode_access_token
 from wombat_server.config import settings
 from wombat_server.database import get_db
-from wombat_server.models import ApiKey, InstanceSetting, Mandant, ProjectGroup, User, UserGroup
+from wombat_server.models import ApiKey, Device, InstanceSetting, Mandant, ProjectGroup, User, UserGroup
 
 
 @dataclass
@@ -103,6 +103,59 @@ async def _set_current_user_id(db: AsyncSession, user_id: uuid.UUID) -> None:
 async def load_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     await _set_current_user_id(db, user_id)
     return await db.get(User, user_id)
+
+
+DEVICE_TOKEN_PREFIX = "wombat_dev_"
+# Writing last_used_at on every request would add a DB write to every API
+# call; once a minute is plenty for an audit/display timestamp.
+_DEVICE_TOUCH_INTERVAL_SECONDS = 60
+
+
+async def authenticate_device_token(
+    db: AsyncSession, raw_token: str, request: Request
+) -> User | None:
+    """Resolve an opaque desktop device token to its (current) user.
+
+    Device rows store only SHA-256 hashes. The user is loaded fresh on each
+    request so role/mandate changes apply immediately; the device's own
+    ``mandant_id`` is an audit tag, not an authorization cache.
+    """
+    if not settings.wombat_device_auth_enabled or not raw_token.startswith(DEVICE_TOKEN_PREFIX):
+        return None
+
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    device = (
+        await db.execute(
+            select(Device).where(
+                Device.token_hash == token_hash,
+                Device.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if device is None:
+        return None
+
+    user = await load_user_by_id(db, device.user_id)
+    if user is None or not user.is_active:
+        return None
+
+    now = datetime.now(timezone.utc)
+    if (
+        device.last_used_at is None
+        or (now - device.last_used_at).total_seconds() >= _DEVICE_TOUCH_INTERVAL_SECONDS
+    ):
+        try:
+            device.last_used_at = now
+            await db.commit()
+        except Exception:
+            # Never fail authentication because the usage timestamp could not
+            # be written; roll back so the request's session stays usable.
+            await db.rollback()
+
+    request.state.auth_method = "device"
+    request.state.device_id = str(device.id)
+    request.state.user_id = str(user.id)
+    return user
 
 
 async def set_login_username(db: AsyncSession, username: str) -> None:
@@ -226,6 +279,11 @@ async def get_current_user(
         if payload.get("type") != "access":
             raise ValueError("not an access token")
     except (PyJWTError, ValueError):
+        # Wave D: an opaque desktop device token is a valid Bearer credential.
+        # Try it before rejecting the request; unknown/revoked tokens still 401.
+        device_user = await authenticate_device_token(db, token, request)
+        if device_user is not None:
+            return device_user
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",

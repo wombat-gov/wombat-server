@@ -721,6 +721,11 @@ class NotificationBase(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     category: str = Field(default="info")  # info, warning, urgent, success
     target_role: str | None = Field(default=None)  # admin, clevel, architect, engineer, all
+    target_user_id: uuid.UUID | None = None
+    link_route: str = Field(default="", max_length=120)
+    link_run_id: str | None = Field(default=None, max_length=64)
+    link_url: str = Field(default="", max_length=500)
+    project: str = Field(default="", max_length=200)
 
 
 class NotificationCreate(NotificationBase):
@@ -842,3 +847,138 @@ class PipelineTrends(BaseModel):
     durationStats: DurationStats
 
 
+
+
+# ── Desktop app summary ──────────────────────────────────────────────────────
+class DesktopLatestRun(BaseModel):
+    id: uuid.UUID
+    project: str
+    branch: str = ""
+    stage: str = ""
+    iac_framework: str = ""
+    score: int
+    failed_controls: int = 0
+    critical: int = 0
+    high: int = 0
+    pass_rate: int | None = None
+    controls_run: int = 0
+    controls_loaded: int = 0
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class DesktopGovernanceItem(BaseModel):
+    type: str
+    project: str = ""
+    days: int
+    expires: date
+
+
+class DesktopGovernance(BaseModel):
+    expiring: int = 0
+    expired: int = 0
+    next: list[DesktopGovernanceItem] = Field(default_factory=list)
+
+
+class DesktopNotifications(BaseModel):
+    unread: int = 0
+
+
+class DesktopDigest(BaseModel):
+    runs_24h: int = 0
+    projects_24h: int = 0
+
+
+class DesktopSummary(BaseModel):
+    generated_at: datetime
+    version: str
+    latest_run: DesktopLatestRun | None = None
+    trend: list[int] = Field(default_factory=list)
+    projects: list[str] = Field(default_factory=list)
+    selected_project: str = ""
+    notifications: DesktopNotifications = Field(default_factory=DesktopNotifications)
+    governance: DesktopGovernance = Field(default_factory=DesktopGovernance)
+    digest: DesktopDigest = Field(default_factory=DesktopDigest)
+
+
+# ── Scan jobs (Wave B) ───────────────────────────────────────────────────────
+class ScanJobCreate(BaseModel):
+    path: str
+    iac: str = "terraform"
+    project: str = ""
+    branch: str = ""
+    stage: str = ""
+    triggered_by: str = "ui"
+
+
+class ScanJobOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    progress: int = 0
+    project: str = ""
+    path: str = ""
+    iac: str = "terraform"
+    branch: str = ""
+    stage: str = ""
+    triggered_by: str = "ui"
+    run_id: uuid.UUID | None = None
+    error: str | None = None
+    requested_by: str = ""
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# ── Global search (Wave C) ───────────────────────────────────────────────────
+class SearchResult(BaseModel):
+    type: str
+    id: str
+    title: str
+    subtitle: str = ""
+    route: str = ""
+    run_id: str | None = None
+    score: int | None = None
+    rank: float = 0.0
+
+
+# ── Desktop device authorization (Wave D) ────────────────────────────────────
+class DeviceStartRequest(BaseModel):
+    device_name: str = Field(min_length=1, max_length=100)
+    client: str = Field(default="", max_length=100)
+
+
+class DeviceStartResponse(BaseModel):
+    device_code: str
+    user_code: str
+    verification_url: str
+    interval: int
+    expires_in: int
+
+
+class DeviceTokenRequest(BaseModel):
+    device_code: str = Field(min_length=10, max_length=200)
+
+
+class DeviceUserOut(BaseModel):
+    id: uuid.UUID
+    username: str
+    display_name: str = ""
+    role: str
+
+
+class DeviceOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    current: bool = False
+
+
+class DeviceTokenResponse(BaseModel):
+    device_token: str
+    token_type: str = "device"
+    device: DeviceOut
+    user: DeviceUserOut

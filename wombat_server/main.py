@@ -26,11 +26,16 @@ from wombat_server.routers.admin import router as admin_router
 from wombat_server.routers.auth import router as auth_router
 from wombat_server.routers.controls import router as controls_router
 from wombat_server.routers.control_packs import router as control_packs_router
+from wombat_server.routers.desktop import router as desktop_router
+from wombat_server.routers.device_auth import router as device_auth_router
+from wombat_server.routers.events import router as events_router
 from wombat_server.routers.evidence import router as evidence_router
 from wombat_server.routers.risks import router as risks_router
 from wombat_server.routers.runs import router as runs_router
 from wombat_server.routers.sandbox import router as sandbox_router
 from wombat_server.routers.scan import router as scan_router
+from wombat_server.routers.scans import router as scans_router
+from wombat_server.routers.search import router as search_router
 from wombat_server.routers.achievements import router as achievements_router
 from wombat_server.routers.badges import router as badges_router
 from wombat_server.routers.leaderboard import router as leaderboard_router
@@ -64,7 +69,7 @@ app = FastAPI(
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",
     openapi_tags=[
-        {"name": "auth", "description": "Login, token refresh, logout, user management."},
+        {"name": "auth", "description": "Login, token refresh, logout, device authorization, user management."},
         {"name": "runs", "description": "Scan run results ingestion and retrieval."},
         {"name": "pipelines", "description": "CI/CD pipeline metrics and trends."},
         {"name": "controls", "description": "Wombat control catalogue management."},
@@ -73,6 +78,10 @@ app = FastAPI(
         {"name": "risks", "description": "Team-shared risk acceptance records."},
         {"name": "sandbox", "description": "Run the real Wombat engine against arbitrary IaC snippets (currently HCL)."},
         {"name": "scan", "description": "Run the Wombat engine against a server-side IaC path and persist the result."},
+        {"name": "scans", "description": "Asynchronous scan jobs and IaC archive uploads."},
+        {"name": "search", "description": "Ranked global search across runs, findings, controls, waivers, risks and projects."},
+        {"name": "desktop", "description": "Aggregated data for the desktop app (menu-bar widgets)."},
+        {"name": "events", "description": "Live Server-Sent Events stream for runs, notifications and governance changes."},
         {"name": "auto-fix", "description": "Preview, apply, and roll back automated IaC remediations."},
         {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
         {"name": "evidence", "description": "Locked, immutable evidence packages for audit handouts with QR codes."},
@@ -144,6 +153,7 @@ async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse
     )
 
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(device_auth_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(compliance_audit_router, prefix="/api/v1")
 app.include_router(sso_router, prefix="/api/v1")
@@ -163,6 +173,10 @@ app.include_router(findings_comments_router, prefix="/api/v1")
 app.include_router(secret_findings_comments_router, prefix="/api/v1")
 app.include_router(sandbox_router, prefix="/api/v1")
 app.include_router(scan_router, prefix="/api/v1")
+app.include_router(scans_router, prefix="/api/v1")
+app.include_router(search_router, prefix="/api/v1")
+app.include_router(desktop_router, prefix="/api/v1")
+app.include_router(events_router, prefix="/api/v1")
 app.include_router(widgets_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(update_router, prefix="/api/v1")
@@ -275,6 +289,7 @@ async def version() -> dict[str, str]:
 
 # Background task for hourly update checking
 _update_checker_task: asyncio.Task | None = None
+_scan_worker_task: asyncio.Task | None = None
 
 
 async def _hourly_update_checker() -> None:
@@ -373,7 +388,7 @@ async def seed_bootstrap_admin_if_empty(logger: logging.Logger) -> None:
 @app.on_event("startup")
 async def _configure_logging_and_seed_admin() -> None:
     """Configure logging, validate config, and create the bootstrap admin user if no users exist."""
-    global _update_checker_task
+    global _update_checker_task, _scan_worker_task
 
     # Validate secrets before serving traffic; tests/imports use permissive defaults.
     validate_runtime_settings()
@@ -401,6 +416,29 @@ async def _configure_logging_and_seed_admin() -> None:
 
     # Start the hourly update checker task
     _update_checker_task = asyncio.create_task(_hourly_update_checker())
+
+    # Start the asynchronous scan-job worker (Wave B).
+    if settings.wombat_scan_jobs_enabled and settings.wombat_scan_enabled:
+        from wombat_server.scan_jobs import scan_worker_loop
+
+        _scan_worker_task = asyncio.create_task(scan_worker_loop())
+        logging.getLogger("wombat_server").info("Scan job worker started")
+
+
+@app.on_event("shutdown")
+async def _stop_background_tasks() -> None:
+    """Cancel background tasks cleanly on shutdown."""
+    for task in (_update_checker_task, _scan_worker_task):
+        if task is not None:
+            task.cancel()
+    for task in (_update_checker_task, _scan_worker_task):
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logging.getLogger("wombat_server").exception("Background task shutdown failed")
 
 
 # Observability wiring. Metrics are on by default; tracing and Sentry are

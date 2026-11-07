@@ -49,6 +49,11 @@ class Settings(BaseSettings):
 
     wombat_env: str = "local"
 
+    # Server-Sent Events (desktop app live updates). In-process bus; optional
+    # Redis fan-out can be added when running multiple replicas.
+    wombat_events_enabled: bool = True
+    wombat_event_buffer: int = 500
+
     # CORS origins (comma-separated)
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
@@ -146,6 +151,20 @@ class Settings(BaseSettings):
     # mandant slug. Empty = reject the legacy shared key after activation.
     wombat_legacy_api_key_mandant_slug: str = ""
 
+    # Desktop device authorization (Wave D). The app starts a device flow,
+    # the user approves it in a browser session, and the app receives an
+    # opaque, revocable Bearer token. Disabled = /auth/device/* returns 404.
+    wombat_device_auth_enabled: bool = True
+    wombat_device_code_ttl_seconds: int = 600
+    wombat_device_poll_interval: int = 5
+    wombat_device_start_ip_limit: int = 20
+    wombat_device_start_ip_window_seconds: int = 600
+    wombat_device_poll_ip_limit: int = 120
+    wombat_device_poll_ip_window_seconds: int = 60
+    # Where the browser approval page sends signed-out users to log in.
+    # Falls back to WOMBAT_PUBLIC_URL, then http://localhost:3000 in local mode.
+    wombat_dashboard_url: str = ""
+
     # Public base URL used to build absolute links in QR codes and audit reports.
     # Set this to the externally reachable address of the server, e.g.
     # https://wombat.example.com  (no trailing slash).
@@ -159,6 +178,14 @@ class Settings(BaseSettings):
     # path is resolved and confined to this directory; symlinks that escape it
     # are rejected. When empty the server's working directory is used.
     wombat_scan_base_dir: str = ""
+
+    # Asynchronous scan jobs (Wave B). The in-process worker polls the
+    # scan_jobs table; uploads are extracted under the scan base directory.
+    wombat_scan_jobs_enabled: bool = True
+    wombat_scan_job_poll_seconds: float = 1.0
+    wombat_scan_upload_max_mb: int = 50
+    wombat_scan_upload_max_extracted_mb: int = 200
+    wombat_scan_upload_max_files: int = 5000
 
     # Optional waivers file used by the auto-fixer to skip waived checks.
     wombat_waivers_file: str = ""

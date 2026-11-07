@@ -290,6 +290,37 @@ class ApiKeyUsageLog(Base):
     ip: Mapped[str] = mapped_column(Text, default="")
 
 
+class ScanJob(Base):
+    """Asynchronous scan request processed by the in-process job worker.
+
+    Jobs are owner-session readable only by the worker; the API always uses the
+    RLS-scoped session, so users only see their mandate's jobs.
+    """
+    __tablename__ = "scan_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued", index=True)
+    project: Mapped[str] = mapped_column(Text, default="")
+    path: Mapped[str] = mapped_column(Text, default="")
+    iac: Mapped[str] = mapped_column(Text, default="terraform")
+    branch: Mapped[str] = mapped_column(Text, default="")
+    stage: Mapped[str] = mapped_column(Text, default="")
+    triggered_by: Mapped[str] = mapped_column(Text, default="ui")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[str] = mapped_column(Text, default="")
+    cleanup_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ApiKey(Base):
     """DB-stored API key for CI/CD pipelines and service accounts."""
     __tablename__ = "api_keys"
@@ -560,6 +591,13 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False)
     target_role: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)  # admin, clevel, architect, engineer, all
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    link_route: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    link_run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    project: Mapped[str] = mapped_column(Text, nullable=False, default="")
     mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
@@ -676,3 +714,61 @@ class UserGroup(Base):
     )
 
 
+
+
+# ── Desktop device authorization (Wave D) ────────────────────────────────────
+class DeviceCode(Base):
+    """Short-lived, one-time device-authorization code (RFC 8628 style).
+
+    Created by an unauthenticated ``POST /auth/device/start``. The user
+    approves it in a browser session; the desktop app then exchanges the
+    raw device code (never stored) for a long-lived device token.
+
+    Like ``refresh_tokens`` and ``sessions`` this is an authentication
+    bootstrap table, not tenant data: the row has no mandate until the
+    approving user is known, so it is deliberately outside RLS. Only
+    hashes of the device code and a human-readable user code are stored.
+    """
+    __tablename__ = "device_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    user_code: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    device_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    client: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    denied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ip_hash: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class Device(Base):
+    """A long-lived desktop device token, revocable by the owning user.
+
+    Stores only a SHA-256 hash of the opaque token. The token is accepted as
+    a Bearer credential by ``get_current_user`` and resolves the *current*
+    user row on every request, so role and mandate changes take effect
+    immediately (the device row's ``mandant_id`` is an audit/display tag,
+    not an authorization cache).
+    """
+    __tablename__ = "devices"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mandants.id", ondelete="SET NULL"), nullable=True
+    )
+    user_agent: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ip_hash: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")

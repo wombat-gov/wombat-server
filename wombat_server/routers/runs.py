@@ -26,6 +26,7 @@ from wombat_server.auth.deps import (
     require_role,
 )
 from wombat_server.database import get_db
+from wombat_server.events import publish_event
 from wombat_server.observability.metrics import runs_ingested
 from wombat_server.models import (
     ApiKeyUsageLog,
@@ -209,6 +210,20 @@ async def _persist_run(
     run.completed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(run)
+
+    await publish_event(
+        "run.created",
+        {
+            "id": str(run.id),
+            "project": run.project,
+            "branch": run.branch,
+            "score": run.score,
+            "stage": run.stage,
+            "created_at": run.created_at.isoformat(),
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        },
+        mandate_id=run.mandant_id,
+    )
 
     # Auto-create ProjectPassport if it doesn't exist.
     # project_passports' real PK is now composite (mandant_id, project) —

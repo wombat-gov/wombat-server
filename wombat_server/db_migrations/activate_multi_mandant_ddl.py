@@ -58,6 +58,7 @@ _GENERIC_TENANT_TABLES = [
     "compliance_audit_events",
     "findings_comments",
     "secret_findings_comments",
+    "scan_jobs",
 ]
 
 # table -> extra USING() OR-branch SQL (one or more), for tables that need
