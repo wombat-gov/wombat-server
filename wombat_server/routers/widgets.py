@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wombat_server.auth.deps import AuthContext, adopt_mandate_of, get_auth_context, get_scoped_db, require_role
 from wombat_server.database import get_db
 from wombat_server.models import Widget, User, Run
-from wombat_server.schemas import WidgetConfig, WidgetCreate, WidgetOut
+from wombat_server.schemas import WidgetCreate, WidgetOut
 
 router = APIRouter(tags=["widgets"])
 

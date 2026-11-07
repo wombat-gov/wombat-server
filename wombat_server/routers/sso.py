@@ -1,7 +1,6 @@
 """SSO configuration management and login flows (OIDC + SAML2)."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -11,10 +10,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select, text, distinct
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import jwt as _jwt
@@ -28,6 +27,7 @@ from wombat_server.auth.deps import (
     require_role,
     set_login_username,
 )
+from wombat_server.auth.cookies import set_session_cookies
 from wombat_server.auth.jwt_utils import create_access_token
 from wombat_server.config import settings
 from wombat_server.database import get_db
@@ -353,21 +353,20 @@ def _redirect_with_error(frontend_url: str, error: str, detail: str | None = Non
     return RedirectResponse(f"{frontend_url}?{urlencode(params)}", status_code=302)  # lgtm[py/url-redirection]
 
 
-def _frontend_redirect(frontend_url: str, access_token: str, refresh_token: str, user: User) -> str:
-    user_dict = {
-        "id": str(user.id),
-        "username": user.username,
-        "display_name": user.display_name,
-        "role": user.role,
-        "auth_provider": user.auth_provider,
-        "is_active": user.is_active,
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-    }
-    u_b64 = base64.urlsafe_b64encode(json.dumps(user_dict).encode()).decode()
-    params = urlencode({"sso_ok": "1", "at": access_token, "rt": refresh_token, "u": u_b64})
-    return f"{frontend_url.rstrip('/')}?{params}"
+def _frontend_redirect(
+    frontend_url: str,
+    access_token: str,
+    refresh_token: str,
+    user: User,
+) -> RedirectResponse:
+    """Set HttpOnly session cookies and redirect to the dashboard.
+
+    Tokens never travel in the URL: the dashboard bootstraps from /auth/me
+    after this redirect.
+    """
+    response = RedirectResponse(f"{frontend_url.rstrip('/')}#/dashboard", status_code=302)
+    set_session_cookies(response, access_token, refresh_token)
+    return response
 
 
 async def _provision_user(
@@ -1385,7 +1384,7 @@ async def oidc_callback(
     await db.commit()
     await db.refresh(user)
 
-    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)  # lgtm[py/url-redirection]
+    return _frontend_redirect(frontend_url, access_token, raw_refresh, user)
 
 
 # ── SAML2 Flow ────────────────────────────────────────────────────────────────
@@ -1582,4 +1581,4 @@ async def saml_acs(
     await db.commit()
     await db.refresh(user)
 
-    return RedirectResponse(_frontend_redirect(frontend_url, access_token, raw_refresh, user), status_code=302)  # lgtm[py/url-redirection]
+    return _frontend_redirect(frontend_url, access_token, raw_refresh, user)

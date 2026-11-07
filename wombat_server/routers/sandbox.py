@@ -4,7 +4,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from wombat.schema import WombatResultSchema
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -410,7 +413,7 @@ async def create_demo_run(
             try:
                 plugin = registry.get("terraform")
             except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"Unknown IaC engine: terraform") from exc
+                raise HTTPException(status_code=400, detail="Unknown IaC engine: terraform") from exc
 
             try:
                 state = plugin.parse(Path(tmpdir))

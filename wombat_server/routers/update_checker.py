@@ -1,6 +1,4 @@
 """Update checker API router for Wombat framework versions."""
-import asyncio
-import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 

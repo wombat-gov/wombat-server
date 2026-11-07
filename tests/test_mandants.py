@@ -28,7 +28,7 @@ async def seed_user(
     *,
     username: str,
     role: str = "clevel",
-    password: str | None = "testpass123",
+    password: str | None = "testpass1234",
     mandant_id: uuid.UUID | None = None,
     holding_role: str | None = None,
 ) -> uuid.UUID:
@@ -616,7 +616,7 @@ async def test_sso_existing_user_assigns_once_then_rejects_mismatch(mandant_db: 
     admin_id = await seed_user(mandant_db, username="admin1", role="admin")
     await activate(app_client, bearer(admin_id, "admin1", "admin"))
     acme_id = await seed_mandant(mandant_db, name="Acme", slug="acme")
-    globex_id = await seed_mandant(mandant_db, name="Globex", slug="globex")
+    await seed_mandant(mandant_db, name="Globex", slug="globex")
     await seed_user(mandant_db, username="ssouser", role="engineer", password=None, mandant_id=None)
 
     from wombat_server.routers.sso import _provision_user
@@ -1828,7 +1828,7 @@ async def test_holding_only_holding_admin_can_login_refresh_and_logout(
     r = await app_client.post("/api/v1/auth/login", json={"username": "holdy", "password": "holdypass123"})
     assert r.status_code == 200, r.text
     body = r.json()
-    access_token = body["access_token"]
+    _access_token = body["access_token"]
     refresh_token = body["refresh_token"]
 
     r = await app_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
@@ -2106,14 +2106,14 @@ async def test_create_user_explicit_mandant_id_holding_admin_only(mandant_db: Ma
     # Without mandant_id: holding-only admin has nothing to inherit,
     # rejected cleanly — pre-existing behaviour, still correct.
     r = await app_client.post(
-        "/api/v1/auth/users", json={"username": "newbie", "password": "testpass123"}, headers=headers,
+        "/api/v1/auth/users", json={"username": "newbie", "password": "testpass1234"}, headers=headers,
     )
     assert r.status_code == 400, r.text
 
     # With mandant_id: holding_admin can target Mandant B directly.
     r = await app_client.post(
         "/api/v1/auth/users",
-        json={"username": "newbie", "password": "testpass123", "mandant_id": str(mandant_b)},
+        json={"username": "newbie", "password": "testpass1234", "mandant_id": str(mandant_b)},
         headers=headers,
     )
     assert r.status_code == 201, r.text
@@ -2126,7 +2126,7 @@ async def test_create_user_explicit_mandant_id_holding_admin_only(mandant_db: Ma
     plain_admin_id = await seed_user(mandant_db, username="plain-admin", role="admin", mandant_id=mandant_b)
     r = await app_client.post(
         "/api/v1/auth/users",
-        json={"username": "sneaky", "password": "testpass123", "mandant_id": str(mandant_b)},
+        json={"username": "sneaky", "password": "testpass1234", "mandant_id": str(mandant_b)},
         headers=bearer(plain_admin_id, "plain-admin", "admin"),
     )
     assert r.status_code == 403, r.text
@@ -2558,3 +2558,31 @@ async def test_instance_mode_counts_are_instance_wide(
     assert data["user_count"] == 5, data
     # Default + Sub A + Sub B = 3
     assert data["mandant_count"] == 3, data
+
+
+async def test_login_locks_account_after_repeated_failures(mandant_db, app_client) -> None:
+    """Wave 1: five bad passwords lock the account; a correct password is
+    rejected until the lock expires."""
+    from wombat_server.auth.rate_limit import login_ip_limiter
+
+    await login_ip_limiter.reset("testclient")
+    await seed_user(
+        mandant_db,
+        username="locky",
+        role="engineer",
+        password="correct-horse",
+    )
+
+    for _ in range(5):
+        response = await app_client.post(
+            "/api/v1/auth/login",
+            json={"username": "locky", "password": "wrong-password"},
+        )
+        assert response.status_code == 401, response.text
+
+    locked = await app_client.post(
+        "/api/v1/auth/login",
+        json={"username": "locky", "password": "correct-horse"},
+    )
+    assert locked.status_code == 401, locked.text
+    assert "retry-after" in {key.lower() for key in locked.headers}

@@ -52,7 +52,8 @@ class TestSettingsValidation:
         settings = Settings(
             wombat_env="staging",
             wombat_jwt_secret="a-very-strong-random-secret-key-32-bytes",
-            wombat_admin_password="admin",
+            wombat_admin_password="a-strong-bootstrap-password",
             wombat_encryption_key="a" * 32,
+            wombat_cookie_secure=True,
         )
         assert settings.wombat_env == "staging"

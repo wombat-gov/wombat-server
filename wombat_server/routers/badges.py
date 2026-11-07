@@ -279,7 +279,6 @@ async def _badge_json_payload(db: AsyncSession, project: str, badge_url: str) ->
         "tier_level": level,
         "tier_label": label,
         "score": score,
-        "color": color,
         "badge_url": badge_url,
         "updated_at": updated_at.isoformat() if updated_at else None,
         # shields.io endpoint badge schema (https://shields.io/endpoint)

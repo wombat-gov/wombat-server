@@ -11,9 +11,7 @@ from pathlib import Path
 import pytest
 
 from wombat.attestation import (
-    compute_run_hash,
     generate_signing_key,
-    sign_revocation_list,
     sign_run,
     verify_certificate_chain,
     verify_envelope,
@@ -103,8 +101,6 @@ def test_verify_envelope_against_root_cert(
     sample_result: WombatResultSchema,
 ) -> None:
     from wombat.schema import (
-        LocalAttestationSchema,
-        ServerValidationSchema,
         ValidationEnvelopeSchema,
     )
 

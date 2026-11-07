@@ -6,12 +6,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import PyJWTError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wombat_server.auth.cookies import ACCESS_COOKIE
 from wombat_server.auth.jwt_utils import decode_access_token
 from wombat_server.config import settings
 from wombat_server.database import get_db
@@ -208,18 +209,20 @@ async def get_instance_mode(db: AsyncSession) -> str:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Validate a Bearer JWT and return the matching active User."""
-    if credentials is None:
+    """Validate a Bearer JWT or browser session cookie and return the User."""
+    token = credentials.credentials if credentials is not None else request.cookies.get(ACCESS_COOKIE)
+    if not token:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(token)
         if payload.get("type") != "access":
             raise ValueError("not an access token")
     except (PyJWTError, ValueError):
@@ -232,6 +235,7 @@ async def get_current_user(
     user = await load_user_by_id(db, uuid.UUID(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+    request.state.user_id = str(user.id)
     return user
 
 
@@ -484,6 +488,7 @@ async def _resolve_legacy_api_key_mandant(db: AsyncSession) -> uuid.UUID | None:
 
 
 async def require_ingest(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     presented_ingest_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: AsyncSession = Depends(get_db),
@@ -550,10 +555,11 @@ async def require_ingest(
             await db.commit()
             return IngestAuth(api_key_id=api_key_row.id, mandant_id=api_key_row.mandant_id)
 
-    # ── JWT path ──────────────────────────────────────────────────────────────
-    if credentials is not None:
+    # ── JWT path (Bearer header or browser session cookie) ───────────────────
+    token = credentials.credentials if credentials is not None else request.cookies.get(ACCESS_COOKIE)
+    if token:
         try:
-            payload = decode_access_token(credentials.credentials)
+            payload = decode_access_token(token)
             if payload.get("type") != "access":
                 raise ValueError
         except (PyJWTError, ValueError):
@@ -561,6 +567,7 @@ async def require_ingest(
 
         user = await load_user_by_id(db, uuid.UUID(payload["sub"]))
         if user and user.is_active:
+            request.state.user_id = str(user.id)
             is_holding_admin = user.holding_role == "holding_admin"
             is_holding_viewer = user.holding_role == "holding_viewer"
             is_group_admin = user.holding_role == "group_admin"

@@ -5,6 +5,10 @@ WORKDIR /app
 # Install git for update checker
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
+# Non-root runtime user. UID/GID 10001 is arbitrary but stable across builds.
+RUN addgroup --system --gid 10001 wombat \
+ && adduser --system --uid 10001 --gid 10001 --home /app --no-create-home --shell /usr/sbin/nologin wombat
+
 RUN pip install --no-cache-dir hatchling build
 
 # Install wombat-core from the local sibling package (pass/).
@@ -18,7 +22,7 @@ COPY wafpass-server/wombat_server/ wombat_server/
 COPY wafpass-server/alembic/ alembic/
 COPY wafpass-server/alembic.ini wafpass-server/entrypoint.sh ./
 
-RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
+RUN pip install --no-cache-dir ".[qr,observability]" && chmod +x entrypoint.sh
 
 # Copy Wombat control YAML files so the sandbox engine can find them.
 # The pass/ directory was already used to install wombat-core above, but the
@@ -28,18 +32,19 @@ COPY pass/controls/ /app/controls/
 # Copy Wombat regulatory logo assets so the PDF reporter can render framework badges.
 COPY pass/assets/ /app/assets/
 
-# Copy Wombat framework repository for update checking
-COPY framework/ /app/framework/
-
 # Default controls path — override with WOMBAT_CONTROLS_DIR if you mount your
 # own controls volume (e.g. for custom/enterprise controls).
 ENV WOMBAT_CONTROLS_DIR=/app/controls
 
-# Framework path for update checking
-ENV WOMBAT_FRAMEWORK_DIR=/app/framework
-
 # Asset path used by the PDF reporter for regulatory logos
 ENV WOMBAT_ASSETS_DIR=/app/assets
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN chown -R wombat:wombat /app
+
+USER 10001:10001
 
 EXPOSE 8000
 

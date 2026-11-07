@@ -15,8 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger("wombat_server")
-
 from wombat_server.auth.deps import (
     AuthContext,
     bypasses_group_scoping,
@@ -28,6 +26,8 @@ from wombat_server.auth.deps import (
 from wombat_server.config import settings
 from wombat_server.models import Run, User
 from wombat_server.path_safety import resolve_scan_path
+
+logger = logging.getLogger("wombat_server")
 
 router = APIRouter(prefix="/auto-fix", tags=["auto-fix"])
 

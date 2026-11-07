@@ -5,17 +5,23 @@ import asyncio
 import logging
 import os
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.security import HTTPBearer
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from wombat_server.auth.csrf import CSRFMiddleware, SecurityHeadersMiddleware
 from wombat_server.config import settings, validate_runtime_settings
 from wombat_server.database import get_db
 from wombat_server.models import Validation
+from wombat_server.observability.health import router as health_router
+from wombat_server.observability.logging import configure_logging
+from wombat_server.observability.metrics import setup_metrics
+from wombat_server.observability.middleware import RequestContextMiddleware
+from wombat_server.observability.tracing import setup_sentry, setup_tracing
 from wombat_server.routers.admin import router as admin_router
 from wombat_server.routers.auth import router as auth_router
 from wombat_server.routers.controls import router as controls_router
@@ -30,6 +36,7 @@ from wombat_server.routers.badges import router as badges_router
 from wombat_server.routers.leaderboard import router as leaderboard_router
 from wombat_server.routers.projects import router as projects_router
 from wombat_server.routers.sso import router as sso_router
+from wombat_server.routers.scim import router as scim_router
 from wombat_server.routers.compliance_audit import router as compliance_audit_router
 from wombat_server.routers.waivers import router as waivers_router
 from wombat_server.routers.findings_comments import router as findings_comments_router
@@ -46,6 +53,9 @@ from wombat_server.validation_service import ValidationService, load_validation_
 _FRAMEWORK_UPDATE_INFO_PATH = os.environ.get(
     "WOMBAT_UPDATE_INFO_PATH", "/app/framework-update-info.yml"
 )
+
+# Configure structured logging once, before the app starts serving.
+configure_logging()
 
 app = FastAPI(
     title="wombat-server",
@@ -104,10 +114,40 @@ app.add_middleware(
     expose_headers=[],
 )
 
+# Reject Host-header injection before routing. Outside local, an empty
+# allowlist is a startup error (see validate_runtime_settings), so this is
+# only permissive in development.
+if settings.allowed_hosts_list:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.allowed_hosts_list,
+    )
+
+# Defense-in-depth headers on API responses; CSRF applies only to
+# cookie-authenticated unsafe requests (Bearer/API-key clients are exempt).
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CSRFMiddleware)
+# Outer-most: correlate and log every request, including CSRF rejections.
+app.add_middleware(RequestContextMiddleware)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+    """Log unexpected failures and return a correlation ID, never a traceback."""
+    request_id = getattr(request.state, "request_id", "")
+    logging.getLogger("wombat_server.error").exception(
+        "Unhandled exception", extra={"request_id": request_id}
+    )
+    return JSONResponse(
+        {"detail": "Internal server error", "request_id": request_id},
+        status_code=500,
+    )
+
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(compliance_audit_router, prefix="/api/v1")
 app.include_router(sso_router, prefix="/api/v1")
+app.include_router(scim_router)
 app.include_router(achievements_router, prefix="/api/v1")
 app.include_router(badges_router, prefix="/api/v1")
 app.include_router(leaderboard_router, prefix="/api/v1")
@@ -127,6 +167,8 @@ app.include_router(widgets_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(update_router, prefix="/api/v1")
 app.include_router(auto_fix_router, prefix="/api/v1")
+# Liveness/readiness routes (/livez, /health, /readyz).
+app.include_router(health_router)
 
 
 # Module-level validation service singleton for public trust endpoints.
@@ -204,11 +246,6 @@ async def get_framework_update_info() -> FileResponse:
     return FileResponse(
         _FRAMEWORK_UPDATE_INFO_PATH, media_type="text/yaml", filename="framework-update-info.yml"
     )
-
-
-@app.get("/health", tags=["health"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
 
 
 @app.get("/version", tags=["health"])
@@ -322,12 +359,14 @@ async def seed_bootstrap_admin_if_empty(logger: logging.Logger) -> None:
             role=settings.wombat_admin_role,
             auth_provider="local",
             password_hash=hash_password(settings.wombat_admin_password),
+            must_change_password=settings.wombat_force_password_rotation,
         )
         db.add(admin)
         await db.commit()
-        print(
-            f"[wombat-server] Seeded admin user '{settings.wombat_admin_username}' "
-            f"with role '{settings.wombat_admin_role}'."
+        logger.info(
+            "Seeded admin user '%s' with role '%s'.",
+            settings.wombat_admin_username,
+            settings.wombat_admin_role,
         )
 
 
@@ -339,12 +378,6 @@ async def _configure_logging_and_seed_admin() -> None:
     # Validate secrets before serving traffic; tests/imports use permissive defaults.
     validate_runtime_settings()
 
-    # Configure logging to show DEBUG level messages
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler()],
-    )
     logger = logging.getLogger("wombat_server")
     logger.info("=== Wombat Server starting ===")
 
@@ -370,8 +403,15 @@ async def _configure_logging_and_seed_admin() -> None:
     _update_checker_task = asyncio.create_task(_hourly_update_checker())
 
 
+# Observability wiring. Metrics are on by default; tracing and Sentry are
+# no-ops unless their endpoint/DSN is configured.
+setup_sentry()
+setup_metrics(app)
+setup_tracing(app)
+
+
 def start() -> None:
-    uvicorn.run("wombat_server.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("wombat_server.main:app", host="0.0.0.0", port=8000, reload=False)  # nosec B104
 
 
 def legacy_start() -> None:

@@ -1,0 +1,18 @@
+# CODEOWNERS for wombat-server.
+# Replace the example teams with your real GitHub teams; unresolved handles do
+# not protect anything. Keep the security-sensitive paths listed here.
+
+* @wombat-gov/platform
+
+/wombat_server/auth/            @wombat-gov/security
+/wombat_server/audit_chain.py   @wombat-gov/security
+/wombat_server/routers/scim.py  @wombat-gov/security
+/wombat_server/routers/admin.py @wombat-gov/security
+/wombat_server/routers/sso.py   @wombat-gov/security
+/wombat_server/secret_enc.py    @wombat-gov/security
+
+/alembic/                       @wombat-gov/platform
+/Dockerfile                     @wombat-gov/platform
+/entrypoint.sh                  @wombat-gov/platform
+/.github/                       @wombat-gov/platform
+/pyproject.toml                @wombat-gov/platform

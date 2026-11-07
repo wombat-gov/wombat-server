@@ -66,7 +66,11 @@ The server refuses to start in non-local environments unless critical secrets ar
 | Environment variable | Purpose | Guidance |
 |----------------------|---------|----------|
 | `WOMBAT_JWT_SECRET` | HS256 signing key for access tokens | Must be changed from the shipped default. Generate with `openssl rand -hex 32`. |
-| `WOMBAT_ENCRYPTION_KEY` | At-rest encryption key for SSO secrets | Generate with `openssl rand -base64 32`. Required when `WOMBAT_ENV != local`. |
+| `WOMBAT_ENCRYPTION_KEY` | At-rest encryption key for SSO secrets | Generate with `openssl rand -base64 32`. Required when `WOMBAT_ENV != local`, and must differ from the JWT secret. |
+| `WOMBAT_ADMIN_PASSWORD` | Bootstrap admin password | At least 16 characters. The admin is forced to rotate it on first login. |
+| `WOMBAT_APP_DB_PASSWORD` | Password for the least-privilege `wombat_app` runtime role | Required by `RUNTIME_DATABASE_URL`; never reuse the owner password. |
+| `WOMBAT_ALLOWED_HOSTS` | Host-header allowlist | Comma-separated public hostnames. Required outside local; `TrustedHostMiddleware` rejects anything else. |
+| `WOMBAT_COOKIE_SECURE` | Secure flag on session cookies | Must be `true` outside local (HTTPS). |
 
 Never commit these values. Use Docker secrets, a secret manager, or environment injection instead of plain `.env` files in production.
 
@@ -88,6 +92,11 @@ Prefer `aws_sm` or `vault_transit` in production over the local Fernet backend.
 - `WOMBAT_API_KEY`: Use a long random value for CI/CD ingestion. Rotate it regularly.
 - `CORS_ORIGINS`: Restrict to known origins; do not use `*` in production.
 - `WOMBAT_PUBLIC_URL`: Controls the base URL in public evidence/achievement/badge links. Set it to the public-facing HTTPS endpoint.
+- `WOMBAT_COOKIE_AUTH` / `WOMBAT_CSRF_ENABLED`: HttpOnly cookie sessions with double-submit CSRF. Leave enabled in production.
+- `WOMBAT_LOGIN_MAX_FAILURES` / `WOMBAT_LOGIN_LOCK_MINUTES`: per-account lockout (default 5 failures / 15 minutes).
+- `WOMBAT_LOGIN_IP_LIMIT` / `WOMBAT_LOGIN_IP_WINDOW_SECONDS`: per-IP login throttle.
+- `WOMBAT_REDIS_URL`: shared limiter state for multi-replica deployments. Empty uses an in-memory limiter.
+- `WOMBAT_PASSWORD_MIN_LENGTH` / `WOMBAT_ADMIN_PASSWORD_MIN_LENGTH`: password policy (defaults 12 / 16).
 
 ---
 
@@ -95,6 +104,12 @@ Prefer `aws_sm` or `vault_transit` in production over the local Fernet backend.
 
 - Access tokens are short-lived HS256 JWTs (default 60 minutes).
 - Refresh tokens are opaque, hashed with SHA-256, and stored in the `refresh_tokens` table.
+- Browser sessions use `HttpOnly`, `Secure`, `SameSite` cookies. Access and refresh tokens are never stored in `localStorage` and SSO callbacks never put tokens in the URL.
+- Cookie-authenticated unsafe requests require a double-submit CSRF token and an allowed `Origin`; Bearer/API-key clients are exempt.
+- Failed logins are counted per account and locked after `WOMBAT_LOGIN_MAX_FAILURES`; the counter resets on success. Unknown usernames take the same bcrypt time as known ones.
+- The bootstrap admin and admin-initiated password resets set `must_change_password`; the dashboard blocks every route until the password is rotated. Passwords must be at least 12 characters and mix letters with numbers or symbols.
+- `TrustedHostMiddleware` rejects unknown Host headers, and uvicorn only accepts `X-Forwarded-For` from configured proxy addresses.
+- Runtime containers run as non-root; the production compose file is standalone so no development port is published.
 - SSO `id_token` signatures are verified against the IdP's JWKS; `aud` and `nonce` claims are validated.
 - SAML2 assertions are validated with the configured IdP certificate.
 - SSO client secrets and SAML2 private keys are encrypted at rest before being written to PostgreSQL.

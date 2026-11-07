@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
-from typing import Annotated, Union
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel

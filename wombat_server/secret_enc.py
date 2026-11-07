@@ -82,7 +82,6 @@ def _local_decrypt(blob: dict) -> str:
 async def _aws_sm_encrypt(plaintext: str, secret_name: str) -> str:
     try:
         import boto3
-        import botocore.exceptions
     except ImportError as exc:
         raise RuntimeError(
             "boto3 is required for the aws_sm backend: "

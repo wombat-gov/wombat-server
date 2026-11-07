@@ -11,7 +11,7 @@ the filesystem, enabling rollback to any previously imported version.
 from __future__ import annotations
 
 import io
-import tempfile
+import json
 import zipfile
 import yaml
 from pathlib import Path
@@ -25,7 +25,7 @@ from wombat_server.auth.deps import require_role
 from wombat_server.config import settings
 from wombat_server.database import get_db
 from wombat_server.models import Control, ControlPack, User, _now
-from wombat_server.schemas import ControlPackOut, ControlPackSyncIn, Envelope, Meta
+from wombat_server.schemas import ControlPackDriftOut, ControlPackOut, ControlPackSyncIn, Envelope, Meta
 
 router = APIRouter(prefix="/control-packs", tags=["control-packs"])
 
@@ -51,9 +51,16 @@ _VALID_TYPES = frozenset({"governance", "configuration", "iac", "network", "iden
 # Valid pillar values (matching the schema and dashboard)
 _VALID_PILLARS = ["security", "cost", "operations", "performance", "reliability", "sovereign", "sustainability", "agentic"]
 
-# Pillar name mapping (YAML -> schema)
+# Pillar name mapping (YAML -> schema). The framework has shipped a few
+# non-canonical spellings; normalise them at import time so the database and
+# the API never expose them.
 _PILLAR_MAPPING = {
     "agentic": "agentic",
+    "excellence": "operations",
+    "efficiancy": "performance",
+    "efficiency": "performance",
+    "operational": "operations",
+    "sovereignty": "sovereign",
 }
 
 
@@ -126,6 +133,106 @@ async def _apply_snapshot(db: AsyncSession, snapshot: list[dict]) -> None:
                 if k != "id":
                     setattr(ctrl, k, v)
             ctrl.updated_at = _now()
+
+
+def _json_list(value: object) -> list:
+    """Return a list, tolerating rows where a JSONB column holds a JSON string.
+
+    Packs imported by older server versions double-encoded ``type``, ``checks``
+    and ``regulatory_mapping``; without this the comparison would report every
+    such control as changed.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    return value if isinstance(value, list) else []
+
+
+def _control_fields(ctrl: Control) -> dict:
+    """Project an ORM control into the same shape as _raw_to_db_fields()."""
+    return {
+        "id": ctrl.id,
+        "pillar": ctrl.pillar or "",
+        "severity": ctrl.severity or "",
+        "type": sorted(_json_list(ctrl.type)),
+        "description": ctrl.description or "",
+        "checks": _json_list(ctrl.checks),
+        "regulatory_mapping": _json_list(ctrl.regulatory_mapping),
+    }
+
+
+def _signature(fields: dict) -> str:
+    """Stable comparison key, ignoring key/list order and timestamps."""
+    return json.dumps({
+        "pillar": fields.get("pillar") or "",
+        "severity": fields.get("severity") or "",
+        "type": sorted(fields.get("type") or []),
+        "description": fields.get("description") or "",
+        "checks": sorted(
+            json.dumps(c, sort_keys=True, default=str)
+            for c in (fields.get("checks") or [])
+        ),
+        "regulatory_mapping": fields.get("regulatory_mapping") or [],
+    }, sort_keys=True, default=str)
+
+
+def _distribution(fields_map: dict[str, dict], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for fields in fields_map.values():
+        value = str(fields.get(key) or "")
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+@router.get("/drift", response_model=Envelope[ControlPackDriftOut])
+async def pack_drift(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    actor: Annotated[User, Depends(require_role("admin"))],
+) -> Envelope[ControlPackDriftOut]:
+    """Compare WOMBAT_CONTROLS_DIR with the active database without importing anything."""
+    controls_dir = Path(settings.wombat_controls_dir)
+    if not controls_dir.is_dir():
+        raise HTTPException(
+            503,
+            detail=f"Controls directory '{controls_dir}' is not accessible on this server.",
+        )
+
+    disk_fields = {
+        fields["id"]: fields
+        for fields in (_raw_to_db_fields(raw) for raw in _load_yamls_from_dir(controls_dir))
+    }
+    db_controls = (await db.execute(select(Control))).scalars().all()
+    active_fields = {ctrl.id: _control_fields(ctrl) for ctrl in db_controls}
+    active_pack = (
+        await db.execute(select(ControlPack).where(ControlPack.is_active.is_(True)))
+    ).scalars().first()
+
+    disk_ids = set(disk_fields)
+    active_ids = set(active_fields)
+    added = sorted(disk_ids - active_ids)
+    removed = sorted(active_ids - disk_ids)
+    changed = sorted(
+        control_id
+        for control_id in disk_ids & active_ids
+        if _signature(disk_fields[control_id]) != _signature(active_fields[control_id])
+    )
+
+    return Envelope(data=ControlPackDriftOut(
+        in_sync=not added and not removed and not changed,
+        active_pack_version=active_pack.version if active_pack else None,
+        disk_total=len(disk_fields),
+        active_total=len(active_fields),
+        added=added,
+        removed=removed,
+        changed=changed,
+        disk_by_pillar=_distribution(disk_fields, "pillar"),
+        active_by_pillar=_distribution(active_fields, "pillar"),
+        disk_by_severity=_distribution(disk_fields, "severity"),
+        active_by_severity=_distribution(active_fields, "severity"),
+    ))
 
 
 def _pack_to_out(pack: ControlPack) -> ControlPackOut:

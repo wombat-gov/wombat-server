@@ -258,8 +258,6 @@ async def generate_update_info(
         If the remote check fails, a degraded object is returned and persisted
         so the file always exists and the server can keep starting.
     """
-    from wombat_server.database import AsyncSessionLocal
-    from wombat_server.models import Notification
 
     repo_url = os.environ.get(
         "WOMBAT_FRAMEWORK_REPO_URL", settings.wombat_framework_repo_url
@@ -345,7 +343,7 @@ async def _send_update_notifications(message: str) -> None:
         async with get_owner_connection() as conn:
             db = AsyncSession(bind=conn)
 
-            stmt = select(User).where(User.role == "admin", User.is_active == True)
+            stmt = select(User).where(User.role == "admin", User.is_active.is_(True))
             result = await db.execute(stmt)
             admins = list(result.scalars().all())
 

@@ -1,7 +1,7 @@
 """Compliance audit event endpoints — server-side persistence for dashboard audit log."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wombat_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
+from wombat_server.audit_chain import chain_event
 from wombat_server.models import ComplianceAuditEvent, User
 from wombat_server.schemas import ComplianceAuditEventIn, ComplianceAuditEventOut, Envelope
 
@@ -47,6 +48,7 @@ async def create_audit_event(
         mandant_id=auth.mandant_id,
         **kwargs,
     )
+    await chain_event(db, event)
     db.add(event)
     await db.commit()
     await db.refresh(event)

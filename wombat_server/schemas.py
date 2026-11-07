@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+if TYPE_CHECKING:
+    from wombat_server.models import Run
 
 # Re-export control schema types from wombat-core so callers only need one import.
 from wombat.control_schema import WizardCheck, WizardControl  # noqa: F401
@@ -119,6 +122,22 @@ class ControlPackOut(BaseModel):
 class ControlPackSyncIn(BaseModel):
     version: str = Field(description="Semantic version string, e.g. v1.2.0")
     description: str = ""
+
+
+class ControlPackDriftOut(BaseModel):
+    """Comparison between the controls directory on disk and the active database."""
+
+    in_sync: bool
+    active_pack_version: str | None
+    disk_total: int
+    active_total: int
+    added: list[str]
+    removed: list[str]
+    changed: list[str]
+    disk_by_pillar: dict[str, int]
+    active_by_pillar: dict[str, int]
+    disk_by_severity: dict[str, int]
+    active_by_severity: dict[str, int]
 
 
 def _coerce_date(v: object) -> date | None:
@@ -438,8 +457,24 @@ class AdminLogOut(BaseModel):
 
 
 SYSLOG_ACTIONS: list[str] = [
+    "login",
     "login_success",
     "login_failed",
+    "login_mfa_required",
+    "account_locked",
+    "login_unlocked",
+    "password_changed",
+    "mfa_success",
+    "mfa_setup_started",
+    "mfa_enabled",
+    "mfa_disabled",
+    "mfa_challenge_failed",
+    "mfa_recovery_used",
+    "mfa_recovery_codes_regenerated",
+    "session_revoked",
+    "sessions_revoked_all",
+    "user_data_exported",
+    "user_anonymized",
     "logout",
     "user_invited",
     "user_role_changed",

@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
 
-echo "DATABASE_URL: $DATABASE_URL"
+# Never print DATABASE_URL: it contains the database password.
+echo "Starting wombat-server"
 
 python - <<'EOF'
 import asyncio
@@ -86,4 +87,8 @@ command.upgrade(cfg, "head")
 print("Migrations complete.")
 EOF
 
-exec uvicorn wombat_server.main:app --host 0.0.0.0 --port 8000
+exec uvicorn wombat_server.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --proxy-headers \
+    --forwarded-allow-ips="${WOMBAT_FORWARDED_ALLOW_IPS:-127.0.0.1}"

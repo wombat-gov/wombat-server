@@ -27,8 +27,18 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Force a password rotation after bootstrap/admin reset. Cleared by
+    # POST /api/v1/auth/change-password.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Login protection (Wave 1): per-account failure counter and lockout.
+    failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failed_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     prefs: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # SCIM identity attributes (Wave 4). email is also used for notifications.
+    email: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     # Multi-mandant (Phase 0, ADR-003) — nullable and ignored while
@@ -118,6 +128,11 @@ class UserAuditLog(Base):
     ip: Mapped[str] = mapped_column(Text, default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
+    # Tamper-evident hash chain (Wave 4). Nullable for rows written before the
+    # chain was introduced; new rows are always chained.
+    sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SyslogConfig(Base):
@@ -159,6 +174,41 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Session(Base):
+    """A browser/device session, linked to one refresh-token family."""
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    revoked_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    user_agent: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    ip_hash: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    label: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
+
+
+class UserMFA(Base):
+    """Per-user multi-factor authentication state."""
+    __tablename__ = "user_mfa"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    totp_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recovery_codes_hash: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    webauthn_credentials: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    last_totp_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class ControlPack(Base):
@@ -381,6 +431,10 @@ class ComplianceAuditEvent(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
+    # Tamper-evident hash chain (Wave 4).
+    sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RunFinding(Base):

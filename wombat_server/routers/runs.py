@@ -3,16 +3,14 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-logger = logging.getLogger(__name__)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +26,7 @@ from wombat_server.auth.deps import (
     require_role,
 )
 from wombat_server.database import get_db
+from wombat_server.observability.metrics import runs_ingested
 from wombat_server.models import (
     ApiKeyUsageLog,
     Evidence,
@@ -55,9 +54,10 @@ from wombat_server.schemas import (
     RunCreate,
     RunDetail,
     RunSummary,
-    SecretFindingSchema,
 )
 from wombat_server.validation_service import ValidationService, load_validation_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -312,6 +312,7 @@ async def create_run(
     CI/CD pipelines can push results without a user account.
     """
     summary = await _persist_run(db, payload, auth, request)
+    runs_ingested.inc()
     return Envelope(data=summary)
 
 
@@ -333,7 +334,6 @@ async def list_runs(
     Non-admin users (and non-bypassing holding/group roles) can only see
     runs for projects they have group access to.
     """
-    from wombat_server.models import ProjectGroup
 
     stmt = select(Run).order_by(Run.created_at.desc(), Run.id.desc()).limit(limit)
 
@@ -631,7 +631,7 @@ async def get_findings(
     pillar: str | None = Query(default=None),
     status: str | None = Query(default=None),
 ) -> Envelope[list[FindingSchema]]:
-    run = await _check_run_access(run_id, db, user, auth)
+    await _check_run_access(run_id, db, user, auth)
 
     logger.info("=== GET FINDINGS DEBUG ===")
     logger.info("Run ID: %s", run_id)
@@ -962,7 +962,6 @@ async def export_sprint_slack(
     if controls:
         for ctrl in controls[:5]:  # Limit to first 5 controls
             severity = ctrl['severity']
-            sev_color = {'CRITICAL': '#DA2C38', 'HIGH': '#f97316', 'MEDIUM': '#eab308', 'LOW': '#22c55e'}.get(severity, '#64748b')
             frameworks = ', '.join(ctrl['frameworks'][:3]) if ctrl['frameworks'] else 'N/A'
 
             message_text += (

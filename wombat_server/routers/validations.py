@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated
 
 import tempfile
 from pathlib import Path
@@ -26,11 +26,6 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wombat.attestation import (
-    verify_certificate_chain,
-    verify_envelope,
-    verify_server_signature,
-)
 from wombat.badge import generate_badge_svg
 from wombat.schema import (
     LocalAttestationSchema,
@@ -50,16 +45,15 @@ except Exception:  # pragma: no cover - reportlab may not be installed
 from wombat_server.auth.deps import adopt_mandate_of, get_scoped_db, require_role
 from wombat_server.config import settings
 from wombat_server.database import get_db
-from wombat_server.models import Mandant, Run, User, UserAuditLog, Validation
+from wombat_server.models import Mandant, User, UserAuditLog, Validation
 from wombat_server.schemas import (
     Envelope,
     InternalValidationSubmit,
     ValidationBadge,
     ValidationRecord,
-    ValidationSubmit,
     ValidationVerify,
 )
-from wombat_server.validation_service import load_validation_service
+from wombat_server.validation_service import ValidationService, load_validation_service
 
 router = APIRouter(prefix="/validations", tags=["validations"])
 

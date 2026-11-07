@@ -1,0 +1,114 @@
+name: ci
+
+# Pull-request and main-branch gate for the server.
+#
+# mypy is intentionally scoped to the Wave 2 observability/auth modules: the
+# legacy package has a 100+ error baseline that is being burned down module by
+# module. The gate is meaningful for new code and never silently passes a new
+# error in those modules.
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: lint, type, test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev,observability]"
+
+      - name: Ruff
+        run: ruff check wombat_server tests
+
+      - name: Type-check (new modules)
+        run: >
+          mypy
+          wombat_server/observability
+          wombat_server/auth/cookies.py
+          wombat_server/auth/csrf.py
+          wombat_server/auth/password_policy.py
+          wombat_server/auth/rate_limit.py
+          wombat_server/auth/mfa.py
+          wombat_server/auth/sessions.py
+          wombat_server/audit_chain.py
+
+      - name: Bandit (medium and above)
+        run: bandit -r wombat_server -ll
+
+      - name: Dependency audit
+        run: pip-audit
+
+      - name: Tests + coverage
+        env:
+          WOMBAT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: pytest --cov=wombat_server --cov-report=term --cov-report=xml --cov-fail-under=60
+
+      - name: Migration upgrade / downgrade / upgrade
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ci_migrations
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def main() -> None:
+              conn = await asyncpg.connect(
+                  "postgresql://postgres:postgres@localhost:5432/postgres"
+              )
+              await conn.execute("DROP DATABASE IF EXISTS ci_migrations")
+              await conn.execute("CREATE DATABASE ci_migrations")
+              await conn.close()
+
+          asyncio.run(main())
+          PY
+          alembic upgrade head
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: OpenAPI snapshot is current
+        run: |
+          python scripts/export_openapi.py
+          git diff --exit-code openapi.json
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: ignore

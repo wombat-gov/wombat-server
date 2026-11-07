@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -25,11 +25,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
-from wombat_server.auth.deps import AuthContext, get_auth_context, get_current_user, get_scoped_db
+from wombat_server.auth.deps import AuthContext, get_auth_context, get_current_user, get_scoped_db, require_role
+from wombat_server.auth.sessions import revoke_user_sessions
 from wombat_server.database import get_db, get_owner_connection
 from wombat_server.db_migrations.activate_multi_mandant_ddl import ALL_TENANT_TABLES, apply_multi_mandant_ddl
 from wombat_server.mandant_ancestry import recompute_mandant_ancestry
-from wombat_server.models import InstanceSetting, Mandant, SyslogConfig, User, UserAuditLog
+from wombat_server.audit_chain import chain_event, verify_chain
+from wombat_server.models import ComplianceAuditEvent, InstanceSetting, Mandant, Session, User, UserAuditLog
 from wombat_server.schemas import AdminLogOut, Envelope, SyslogConfigIn, SyslogConfigOut, SyslogTestOut
 from wombat_server.syslog import get_syslog_config, test_syslog_config, update_syslog_config
 
@@ -241,6 +243,143 @@ async def list_admin_logs(
     return Envelope(data=out)
 
 
+@router.get("/audit/verify")
+async def verify_audit_chain(
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    _: Annotated[AuthContext, Depends(require_admin_or_holding_admin)],
+) -> dict:
+    """Recompute both audit chains and return the first broken entry, if any."""
+    tables: dict[str, list[dict]] = {}
+    valid = True
+    for model in (UserAuditLog, ComplianceAuditEvent):
+        tenants = (
+            await db.execute(select(model.mandant_id).distinct())
+        ).scalars().all()
+        results: list[dict] = []
+        for tenant in tenants:
+            result = await verify_chain(db, model, tenant)
+            results.append(
+                {"mandant_id": str(tenant) if tenant else None, **result}
+            )
+            valid = valid and bool(result["valid"])
+        tables[model.__tablename__] = results
+    return {"valid": valid, "tables": tables}
+
+
+@router.get("/users/{user_id}/export")
+async def export_user_data(
+    user_id: uuid.UUID,
+    acting_user: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+) -> dict:
+    """Export the personal data held for one user (GDPR access request)."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, detail="User not found.")
+    sessions = list(
+        (
+            await db.execute(
+                select(Session)
+                .where(Session.user_id == user_id)
+                .order_by(Session.created_at.desc())
+            )
+        ).scalars().all()
+    )
+    audit_rows = list(
+        (
+            await db.execute(
+                select(UserAuditLog)
+                .where(UserAuditLog.actor_id == user_id)
+                .order_by(UserAuditLog.timestamp.desc())
+            )
+        ).scalars().all()
+    )
+    event = UserAuditLog(
+        actor_id=acting_user.id,
+        action="user_data_exported",
+        detail={"target_user_id": str(user_id)},
+        ip="",
+        mandant_id=user.mandant_id,
+    )
+    await chain_event(db, event)
+    db.add(event)
+    await db.commit()
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "user": {
+            "id": str(user.id),
+            "username": user.username,
+            "display_name": user.display_name,
+            "email": user.email,
+            "external_id": user.external_id,
+            "role": user.role,
+            "auth_provider": user.auth_provider,
+            "is_active": user.is_active,
+            "mandant_id": str(user.mandant_id) if user.mandant_id else None,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "prefs": user.prefs or {},
+        },
+        "sessions": [
+            {
+                "id": str(session.id),
+                "created_at": session.created_at.isoformat(),
+                "last_seen_at": session.last_seen_at.isoformat(),
+                "expires_at": session.expires_at.isoformat(),
+                "revoked_at": session.revoked_at.isoformat() if session.revoked_at else None,
+                "label": session.label,
+                "user_agent": session.user_agent,
+            }
+            for session in sessions
+        ],
+        "audit_events": [
+            {
+                "action": row.action,
+                "detail": row.detail or {},
+                "ip": row.ip,
+                "timestamp": row.timestamp.isoformat(),
+            }
+            for row in audit_rows
+        ],
+    }
+
+
+@router.post("/users/{user_id}/anonymize", status_code=204)
+async def anonymize_user(
+    user_id: uuid.UUID,
+    acting_user: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+) -> None:
+    """Anonymize a departing user while retaining the audit history."""
+    if user_id == acting_user.id:
+        raise HTTPException(400, detail="You cannot anonymize your own account.")
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, detail="User not found.")
+
+    await revoke_user_sessions(db, user.id, "user_anonymized", revoked_by=acting_user.id)
+    user.username = f"deleted-{user.id}"
+    user.display_name = "Deleted user"
+    user.email = ""
+    user.external_id = None
+    user.image_url = ""
+    user.password_hash = None
+    user.is_active = False
+    user.must_change_password = False
+    user.prefs = {}
+
+    event = UserAuditLog(
+        actor_id=acting_user.id,
+        action="user_anonymized",
+        detail={"target_user_id": str(user_id)},
+        ip="",
+        mandant_id=user.mandant_id,
+    )
+    await chain_event(db, event)
+    db.add(event)
+    await db.commit()
+
+
 @router.get("/syslog-config", response_model=Envelope[SyslogConfigOut])
 async def read_syslog_config(
     db: Annotated[AsyncSession, Depends(get_scoped_db)],
@@ -384,7 +523,10 @@ async def _activate(conn: AsyncConnection, acting_user_id: uuid.UUID, ip: str) -
         if table == "users":
             continue
         await conn.execute(
-            text(f'UPDATE "{table}" SET mandant_id = :m WHERE mandant_id IS NULL'), {"m": default_mandant_id}
+            # `table` comes from the module-level ALL_TENANT_TABLES constant,
+            # never from request input; the identifier is quoted.
+            text(f'UPDATE "{table}" SET mandant_id = :m WHERE mandant_id IS NULL'),  # nosec B608
+            {"m": default_mandant_id},
         )
 
     # NOT NULL + ENABLE/FORCE ROW LEVEL SECURITY + CREATE POLICY for every

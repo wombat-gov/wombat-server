@@ -74,6 +74,73 @@ class Settings(BaseSettings):
     # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
     wombat_api_key: str = ""
 
+    # ── Browser session / network hardening ───────────────────────────────────
+    # Cookie session (BFF) mode: the server sets HttpOnly cookies; the dashboard
+    # never stores a bearer token. Bearer tokens remain available for CLI/CI.
+    wombat_cookie_auth: bool = True
+    # False by default so `http://localhost` development works. Non-local
+    # environments are required to set it true (validated at startup).
+    wombat_cookie_secure: bool = False
+    wombat_cookie_domain: str = ""
+    wombat_cookie_samesite: str = "lax"
+    wombat_csrf_enabled: bool = True
+
+    # Comma-separated Host/Origin allowlist. Required outside local.
+    # Example: wombat.example.com,api.example.com
+    wombat_allowed_hosts: str = ""
+
+    # Number of trusted reverse proxies in front of the server. 0 = direct
+    # exposure (not recommended); 1 = one edge proxy such as Caddy/Traefik.
+    wombat_trusted_proxy_count: int = 0
+
+    # Force a password rotation after bootstrap/admin reset. Disable only for
+    # automated end-to-end environments; leave true in production.
+    wombat_force_password_rotation: bool = True
+
+    # ── Login protection ──────────────────────────────────────────────────────
+    wombat_login_max_failures: int = 5
+    wombat_login_lock_minutes: int = 15
+    wombat_login_ip_limit: int = 20          # attempts per window per IP
+    wombat_login_ip_window_seconds: int = 60
+    # Redis-backed limiter for multi-replica deployments. Empty = in-memory.
+    wombat_redis_url: str = ""
+
+    # ── Password policy ───────────────────────────────────────────────────────
+    wombat_password_min_length: int = 12
+    wombat_admin_password_min_length: int = 16
+
+    # ── Sessions ──────────────────────────────────────────────────────────────
+    wombat_session_idle_minutes: int = 480
+    wombat_session_absolute_days: int = 7
+    wombat_session_max: int = 10
+
+    # ── MFA ───────────────────────────────────────────────────────────────────
+    wombat_mfa_enabled: bool = True
+    wombat_mfa_required_roles: str = "admin,ciso"
+    wombat_mfa_issuer: str = "WOMBATpass"
+    wombat_mfa_token_minutes: int = 5
+
+    # ── SCIM 2.0 ──────────────────────────────────────────────────────────────
+    wombat_scim_enabled: bool = False
+    wombat_scim_token: str = ""
+    wombat_scim_mandant_slug: str = ""
+    wombat_scim_default_role: str = "engineer"
+
+    # ── Observability ─────────────────────────────────────────────────────────
+    # JSON logs to stdout by default; set "text" for local development.
+    wombat_log_format: str = "json"
+    wombat_log_level: str = "INFO"
+    # Prometheus /metrics. The edge does not proxy it; scrape the app directly.
+    wombat_metrics_enabled: bool = True
+    # OpenTelemetry traces (OTLP). Disabled until a collector is configured.
+    wombat_otel_enabled: bool = False
+    wombat_otel_endpoint: str = ""
+    wombat_otel_sample_rate: float = 0.1
+    # Sentry error tracking. Disabled until a DSN is configured.
+    wombat_sentry_dsn: str = ""
+    wombat_sentry_environment: str = ""
+
+
     # In multi-mandant mode the legacy shared key has no natural mandate, so
     # it is rejected unless an operator explicitly maps it to one via this
     # mandant slug. Empty = reject the legacy shared key after activation.
@@ -155,11 +222,43 @@ class Settings(BaseSettings):
                 "Without it, SSO secrets are derived from WOMBAT_JWT_SECRET, "
                 "which is insecure if that secret is ever rotated or leaked."
             )
+        if self.wombat_env != "local":
+            if self.wombat_encryption_key and self.wombat_encryption_key == self.wombat_jwt_secret:
+                raise ValueError(
+                    "WOMBAT_ENCRYPTION_KEY must be independent of WOMBAT_JWT_SECRET."
+                )
+            if len(self.wombat_admin_password) < self.wombat_admin_password_min_length:
+                raise ValueError(
+                    f"WOMBAT_ADMIN_PASSWORD must be at least "
+                    f"{self.wombat_admin_password_min_length} characters in non-local environments."
+                )
+            if self.wombat_api_key.lower() in {"key", "changeme", "change-me"}:
+                raise ValueError(
+                    "WOMBAT_API_KEY is still a placeholder. Set a strong random value "
+                    "or leave it empty to disable API-key authentication."
+                )
+            if self.wombat_cookie_auth and not self.wombat_cookie_secure:
+                raise ValueError(
+                    "WOMBAT_COOKIE_SECURE must be true when cookie authentication is enabled "
+                    "outside local development."
+                )
         return self
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        raw = self.wombat_allowed_hosts.strip()
+        if raw:
+            return [h.strip() for h in raw.split(",") if h.strip()]
+        # Local development is permissive; non-local is fail-closed.
+        return ["*"] if self.wombat_env == "local" else []
+
+    @property
+    def mfa_required_roles_list(self) -> list[str]:
+        return [r.strip() for r in self.wombat_mfa_required_roles.split(",") if r.strip()]
 
 
 def validate_runtime_settings() -> None:
@@ -182,6 +281,26 @@ def validate_runtime_settings() -> None:
             "WOMBAT_ENCRYPTION_KEY must be set in non-local environments. "
             "Without it, SSO secrets are derived from WOMBAT_JWT_SECRET, "
             "which is insecure if that secret is ever rotated or leaked."
+        )
+    if settings.wombat_encryption_key == settings.wombat_jwt_secret:
+        raise ValueError("WOMBAT_ENCRYPTION_KEY must be independent of WOMBAT_JWT_SECRET.")
+    if len(settings.wombat_admin_password) < settings.wombat_admin_password_min_length:
+        raise ValueError(
+            f"WOMBAT_ADMIN_PASSWORD must be at least "
+            f"{settings.wombat_admin_password_min_length} characters outside local development."
+        )
+    if not settings.allowed_hosts_list:
+        raise ValueError(
+            "WOMBAT_ALLOWED_HOSTS must list the public Host values outside local development."
+        )
+    if not settings.wombat_public_url:
+        raise ValueError(
+            "WOMBAT_PUBLIC_URL must be set outside local development so links and QR codes "
+            "do not depend on the Host header."
+        )
+    if settings.wombat_cookie_auth and not settings.wombat_cookie_secure:
+        raise ValueError(
+            "WOMBAT_COOKIE_SECURE must be true when cookie authentication is enabled."
         )
 
 

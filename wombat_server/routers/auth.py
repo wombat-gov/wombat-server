@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,11 +23,52 @@ from wombat_server.auth.deps import (
     require_role,
     set_login_username,
 )
-from wombat_server.auth.jwt_utils import create_access_token
-from wombat_server.auth.providers.local import authenticate_local, hash_password
+from wombat_server.auth.jwt_utils import create_access_token, create_mfa_token, decode_mfa_token
+from wombat_server.auth.cookies import (
+    REFRESH_COOKIE,
+    clear_session_cookies,
+    set_session_cookies,
+)
+from wombat_server.auth.mfa import (
+    consume_recovery_code,
+    generate_recovery_codes,
+    generate_totp_secret,
+    get_mfa,
+    get_totp_secret,
+    hash_recovery_codes,
+    is_mfa_enabled,
+    mfa_methods,
+    mfa_qr_svg,
+    mfa_required_for_role,
+    provisioning_uri,
+    set_totp_secret,
+    verify_totp,
+)
+from wombat_server.auth.password_policy import PasswordPolicyError, validate_password
+from wombat_server.auth.providers.local import authenticate_local, hash_password, verify_password
+from wombat_server.auth.rate_limit import login_ip_limiter
+from wombat_server.auth.sessions import (
+    create_session,
+    current_family_id,
+    enforce_session_policy,
+    revoke_family,
+    revoke_session,
+    revoke_user_sessions,
+)
+from wombat_server.audit_chain import chain_event
 from wombat_server.config import settings
+from wombat_server.observability.metrics import login_failures, login_locked
 from wombat_server.database import get_db
-from wombat_server.models import ApiKey, ApiKeyUsageLog, Mandant, RefreshToken, User, UserAuditLog, UserGroup
+from wombat_server.models import (
+    ApiKey,
+    ApiKeyUsageLog,
+    Mandant,
+    RefreshToken,
+    Session,
+    User,
+    UserAuditLog,
+    UserGroup,
+)
 from wombat_server.syslog import emit_admin_audit_event
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -47,7 +88,19 @@ def _hash(raw: str) -> str:
 
 
 def _ip(request: Request) -> str:
-    return request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+    """Client IP after uvicorn's trusted-proxy resolution.
+
+    Do not read X-Forwarded-For here: uvicorn's ProxyHeadersMiddleware only
+    trusts it from the configured proxy addresses and writes the resolved
+    peer into request.client. Trusting the raw header would let any caller
+    spoof audit IPs and rate-limit keys.
+    """
+    return request.client.host if request.client else ""
+
+
+# A fixed bcrypt hash used to equalize the timing of an unknown-username
+# login with a known one. The plaintext is irrelevant and never accepted.
+_DUMMY_PASSWORD_HASH = hash_password("wombat-dummy-timing-password")
 
 
 async def _audit(
@@ -58,7 +111,12 @@ async def _audit(
     ip: str = "",
     mandant_id: uuid.UUID | None = None,
 ) -> None:
-    db.add(UserAuditLog(actor_id=actor_id, action=action, detail=detail, ip=ip, mandant_id=mandant_id))
+    # caller is responsible for commit
+    event = UserAuditLog(
+        actor_id=actor_id, action=action, detail=detail, ip=ip, mandant_id=mandant_id,
+    )
+    await chain_event(db, event)
+    db.add(event)
     emit_admin_audit_event(
         action=action,
         detail=detail,
@@ -67,6 +125,74 @@ async def _audit(
         actor_id=str(actor_id) if actor_id else None,
     )
     # caller is responsible for commit
+
+
+async def _issue_session(
+    db: AsyncSession,
+    user: User,
+    request: Request,
+    response: Response,
+    *,
+    audit_action: str = "login",
+) -> dict:
+    """Create a refresh-token family + session row and set the browser cookies."""
+    now = datetime.now(timezone.utc)
+    active = list(
+        (
+            await db.execute(
+                select(Session)
+                .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+                .order_by(Session.created_at)
+            )
+        ).scalars().all()
+    )
+    if len(active) >= settings.wombat_session_max:
+        for old in active[: len(active) - settings.wombat_session_max + 1]:
+            await revoke_session(db, old, "max_sessions_exceeded")
+            await db.execute(
+                update(RefreshToken)
+                .where(
+                    RefreshToken.family_id == old.family_id,
+                    RefreshToken.revoked.is_(False),
+                )
+                .values(revoked=True)
+            )
+
+    family_id = uuid.uuid4()
+    raw_refresh = secrets.token_urlsafe(48)
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token_hash=_hash(raw_refresh),
+            family_id=family_id,
+            expires_at=now + timedelta(days=settings.wombat_jwt_refresh_days),
+        )
+    )
+    await create_session(db, user, family_id, request)
+    access_token = create_access_token(user.id, user.username, user.role, family_id)
+
+    user.last_login_at = now
+    user.failed_login_count = 0
+    user.locked_until = None
+    user.last_failed_login_at = None
+    await _audit(
+        db, user.id, audit_action, {},
+        ip=_ip(request), mandant_id=user.mandant_id,
+    )
+    await db.commit()
+    await login_ip_limiter.reset(_ip(request))
+
+    if settings.wombat_cookie_auth:
+        set_session_cookies(response, access_token, raw_refresh)
+
+    mfa = await get_mfa(db, user.id)
+    return {
+        "access_token": access_token,
+        "refresh_token": raw_refresh,
+        "token_type": "bearer",
+        "user": user,
+        "mfa_enrollment_required": mfa_required_for_role(user.role) and not is_mfa_enabled(mfa),
+    }
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -89,6 +215,9 @@ class UserOut(BaseModel):
     updated_at: datetime | None = None
     mandant_id: uuid.UUID | None = None
     holding_role: str | None = None  # None | "holding_admin" | "holding_viewer" | "group_admin" | "group_viewer"
+    must_change_password: bool = False
+    email: str = ""
+    external_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -98,10 +227,65 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     user: UserOut
+    mfa_enrollment_required: bool = False
+
+
+class MfaChallengeResponse(BaseModel):
+    mfa_required: bool = True
+    mfa_token: str
+    methods: list[str] = []
+
+
+class MfaChallengeRequest(BaseModel):
+    mfa_token: str
+    code: str
+    method: str = "totp"
+
+
+class MfaSetupRequest(BaseModel):
+    current_password: str
+
+
+class MfaSetupOut(BaseModel):
+    secret: str
+    otpauth_uri: str
+    qr_svg: str | None = None
+
+
+class MfaVerifyRequest(BaseModel):
+    code: str
+
+
+class MfaDisableRequest(BaseModel):
+    current_password: str
+    code: str
+
+
+class MfaStatusOut(BaseModel):
+    enabled: bool
+    methods: list[str]
+    recovery_codes_remaining: int
+    required: bool
+
+
+class SessionOut(BaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    label: str = ""
+    user_agent: str = ""
+    current: bool = False
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class AccessTokenResponse(BaseModel):
@@ -112,7 +296,7 @@ class AccessTokenResponse(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=12)
     display_name: str = ""
     image_url: str = ""
     role: str = "clevel"
@@ -131,7 +315,7 @@ class UserUpdate(BaseModel):
     image_url: str | None = None
     role: str | None = None
     is_active: bool | None = None
-    password: str | None = Field(default=None, min_length=8)
+    password: str | None = Field(default=None, min_length=12)
     group: str | None = None  # Optional group name to add to user
     # Phase 3.4 — only ever applied when the acting user is holding_admin
     # (enforced in update_user below, not by the schema).
@@ -141,59 +325,119 @@ class UserUpdate(BaseModel):
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse | MfaChallengeResponse)
 async def login(
     request: Request,
+    response: Response,
     payload: LoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    """Exchange username + password for an access token and a refresh token."""
+    """Exchange username + password for a session cookie and/or bearer tokens."""
+    ip = _ip(request)
+    if not await login_ip_limiter.allow(ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Try again later.",
+            headers={"Retry-After": str(settings.wombat_login_ip_window_seconds)},
+        )
+
     # Auth-bootstrap carve-out: at this point we know only the submitted
     # username, not the user's id or mandate — see
     # db_migrations/activate_multi_mandant_ddl.py and auth/deps.py.
     await set_login_username(db, payload.username)
+
+    # Load the candidate first so lockout state can be checked without
+    # revealing whether the username exists (the error stays generic).
+    candidate = (
+        await db.execute(
+            select(User).where(
+                User.username == payload.username,
+                User.auth_provider == "local",
+            )
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+
+    if candidate is not None and candidate.locked_until and candidate.locked_until > now:
+        retry_after = max(1, int((candidate.locked_until - now).total_seconds()))
+        login_failures.inc()
+        await adopt_mandate_of(
+            db, candidate.mandant_id,
+            is_holding_admin=candidate.holding_role == "holding_admin",
+            is_holding_viewer=candidate.holding_role == "holding_viewer",
+        )
+        await _audit(
+            db, candidate.id, "login_failed", {"reason": "locked"},
+            ip=ip, mandant_id=candidate.mandant_id,
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     record = await authenticate_local(db, payload.username, payload.password)
     if record is None:
+        login_failures.inc()
+        if candidate is not None:
+            await adopt_mandate_of(
+                db, candidate.mandant_id,
+                is_holding_admin=candidate.holding_role == "holding_admin",
+                is_holding_viewer=candidate.holding_role == "holding_viewer",
+            )
+            candidate.failed_login_count = (candidate.failed_login_count or 0) + 1
+            candidate.last_failed_login_at = now
+            if candidate.failed_login_count >= settings.wombat_login_max_failures:
+                candidate.locked_until = now + timedelta(minutes=settings.wombat_login_lock_minutes)
+                login_locked.inc()
+                await _audit(
+                    db, candidate.id, "account_locked",
+                    {
+                        "failed_attempts": candidate.failed_login_count,
+                        "locked_until": candidate.locked_until.isoformat(),
+                    },
+                    ip=ip, mandant_id=candidate.mandant_id,
+                )
+            await _audit(
+                db, candidate.id, "login_failed",
+                {"failed_attempts": candidate.failed_login_count},
+                ip=ip, mandant_id=candidate.mandant_id,
+            )
+            await db.commit()
+        else:
+            # Unknown username: spend the same bcrypt time as a real check so
+            # response timing does not reveal account existence.
+            verify_password(payload.password, _DUMMY_PASSWORD_HASH)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials.")
 
     user = await db.get(User, record.id)
-    # Now that the user's own row is found, adopt its mandate for the rest
-    # of this request — RefreshToken isn't mandate-scoped, but UserAuditLog
-    # (via _audit below) is, and its WITH CHECK needs this set. Also carry
-    # the user's own holding flags: a holding-only account (mandant_id=
-    # None) has no other way to pass the users-table WITH CHECK for the
-    # last_login_at update just below — see adopt_mandate_of()'s docstring.
     await adopt_mandate_of(
         db, user.mandant_id,
         is_holding_admin=user.holding_role == "holding_admin",
         is_holding_viewer=user.holding_role == "holding_viewer",
     )
-    access_token = create_access_token(user.id, user.username, user.role)
 
-    raw_refresh = secrets.token_urlsafe(48)
-    rt = RefreshToken(
-        user_id=user.id,
-        token_hash=_hash(raw_refresh),
-        family_id=uuid.uuid4(),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.wombat_jwt_refresh_days),
-    )
-    db.add(rt)
+    mfa = await get_mfa(db, user.id)
+    if is_mfa_enabled(mfa):
+        await _audit(
+            db, user.id, "login_mfa_required", {},
+            ip=ip, mandant_id=user.mandant_id,
+        )
+        await db.commit()
+        return {
+            "mfa_required": True,
+            "mfa_token": create_mfa_token(user.id),
+            "methods": mfa_methods(mfa),
+        }
 
-    user.last_login_at = datetime.now(timezone.utc)
-    await _audit(db, user.id, "login", {}, ip=_ip(request), mandant_id=user.mandant_id)
-    await db.commit()
-
-    return {
-        "access_token": access_token,
-        "refresh_token": raw_refresh,
-        "token_type": "bearer",
-        "user": user,
-    }
+    return await _issue_session(db, user, request, response)
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)
 async def refresh_token(
     request: Request,
+    response: Response,
     payload: RefreshRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
@@ -202,8 +446,14 @@ async def refresh_token(
     If a revoked token is presented it indicates a replay attack — every token
     in the same family is immediately revoked, forcing re-authentication on all
     devices that shared this token chain.
+
+    The token comes from the request body (CLI/CI) or, when absent, from the
+    HttpOnly ``wombat_refresh`` cookie (dashboard).
     """
-    token_hash = _hash(payload.refresh_token)
+    raw_token = payload.refresh_token or request.cookies.get(REFRESH_COOKIE)
+    if not raw_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found.")
+    token_hash = _hash(raw_token)
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     rt = result.scalar_one_or_none()
 
@@ -221,11 +471,7 @@ async def refresh_token(
             is_holding_admin=bool(replay_user and replay_user.holding_role == "holding_admin"),
             is_holding_viewer=bool(replay_user and replay_user.holding_role == "holding_viewer"),
         )
-        await db.execute(
-            update(RefreshToken)
-            .where(RefreshToken.family_id == rt.family_id)
-            .values(revoked=True)
-        )
+        await revoke_family(db, rt.family_id, "revoked_token_replay", revoked_by=rt.user_id)
         await _audit(db, rt.user_id, "token.family_revoked",
                      {"family_id": str(rt.family_id), "reason": "revoked_token_replay"},
                      ip=_ip(request), mandant_id=replay_user.mandant_id if replay_user else None)
@@ -234,7 +480,7 @@ async def refresh_token(
                             detail="Refresh token already used — all sessions invalidated. Please log in again.")
 
     if rt.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
-        rt.revoked = True
+        await revoke_family(db, rt.family_id, "refresh_token_expired", revoked_by=rt.user_id)
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired.")
 
@@ -242,9 +488,23 @@ async def refresh_token(
     # validation — see auth/deps.py.
     user = await load_user_by_id(db, rt.user_id)
     if user is None or not user.is_active:
-        rt.revoked = True
+        await revoke_family(db, rt.family_id, "user_inactive")
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+
+    session = (
+        await db.execute(select(Session).where(Session.family_id == rt.family_id))
+    ).scalar_one_or_none()
+    if session is None:
+        # Compatibility for tokens issued before the sessions table existed.
+        await create_session(db, user, rt.family_id, request)
+    elif not await enforce_session_policy(db, session):
+        await revoke_family(db, rt.family_id, "session_invalid")
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or revoked. Please log in again.",
+        )
 
     # Rotate: revoke the old token, issue a new one in the same family.
     rt.revoked = True
@@ -257,8 +517,12 @@ async def refresh_token(
     ))
     await db.commit()
 
+    access_token = create_access_token(user.id, user.username, user.role, rt.family_id)
+    if settings.wombat_cookie_auth:
+        set_session_cookies(response, access_token, raw_new)
+
     return {
-        "access_token": create_access_token(user.id, user.username, user.role),
+        "access_token": access_token,
         "refresh_token": raw_new,
         "token_type": "bearer",
     }
@@ -267,23 +531,27 @@ async def refresh_token(
 @router.post("/logout", status_code=204)
 async def logout(
     request: Request,
-    payload: RefreshRequest,
+    response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
+    payload: RefreshRequest | None = Body(default=None),
 ) -> None:
-    """Revoke the supplied refresh token."""
-    token_hash = _hash(payload.refresh_token)
-    result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
-    rt = result.scalar_one_or_none()
-    if rt:
-        rt.revoked = True
-        logout_user = await load_user_by_id(db, rt.user_id)
-        await adopt_mandate_of(
-            db, logout_user.mandant_id if logout_user else None,
-            is_holding_admin=bool(logout_user and logout_user.holding_role == "holding_admin"),
-            is_holding_viewer=bool(logout_user and logout_user.holding_role == "holding_viewer"),
-        )
-        await _audit(db, rt.user_id, "logout", {}, ip=_ip(request), mandant_id=logout_user.mandant_id if logout_user else None)
-        await db.commit()
+    """Revoke the supplied (or cookie-bound) refresh token and clear cookies."""
+    raw_token = (payload.refresh_token if payload else None) or request.cookies.get(REFRESH_COOKIE)
+    if raw_token:
+        token_hash = _hash(raw_token)
+        result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+        rt = result.scalar_one_or_none()
+        if rt:
+            logout_user = await load_user_by_id(db, rt.user_id)
+            await adopt_mandate_of(
+                db, logout_user.mandant_id if logout_user else None,
+                is_holding_admin=bool(logout_user and logout_user.holding_role == "holding_admin"),
+                is_holding_viewer=bool(logout_user and logout_user.holding_role == "holding_viewer"),
+            )
+            await revoke_family(db, rt.family_id, "logout", revoked_by=rt.user_id)
+            await _audit(db, rt.user_id, "logout", {}, ip=_ip(request), mandant_id=logout_user.mandant_id if logout_user else None)
+            await db.commit()
+    clear_session_cookies(response)
 
 
 @router.get("/me", response_model=UserOut)
@@ -292,6 +560,318 @@ async def me(
 ) -> User:
     """Return the authenticated user's profile."""
     return user
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    request: Request,
+    response: Response,
+    payload: ChangePasswordRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Change the caller's password, revoke every refresh token, clear cookies."""
+    if user.auth_provider != "local" or not user.password_hash:
+        raise HTTPException(400, detail="Password login is not enabled for this account.")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, detail="Current password is incorrect.")
+    try:
+        validate_password(payload.new_password, user.username)
+    except PasswordPolicyError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+    await adopt_mandate_of(
+        db, user.mandant_id,
+        is_holding_admin=user.holding_role == "holding_admin",
+        is_holding_viewer=user.holding_role == "holding_viewer",
+    )
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    # Revoke every existing session, then issue this browser a fresh one so the
+    # user is not bounced to the login page after rotating.
+    await revoke_user_sessions(db, user.id, "password_changed", revoked_by=user.id)
+    await _issue_session(db, user, request, response, audit_action="password_changed")
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+async def list_my_sessions(
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[SessionOut]:
+    """List the caller's active sessions, newest first."""
+    current = await current_family_id(db, request)
+    rows = (
+        await db.execute(
+            select(Session)
+            .where(Session.user_id == user.id, Session.revoked_at.is_(None))
+            .order_by(Session.created_at.desc())
+        )
+    ).scalars().all()
+    return [
+        SessionOut(
+            id=row.id,
+            created_at=row.created_at,
+            last_seen_at=row.last_seen_at,
+            expires_at=row.expires_at,
+            revoked_at=row.revoked_at,
+            label=row.label,
+            user_agent=row.user_agent,
+            current=row.family_id == current,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def revoke_my_session(
+    session_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    session = await db.get(Session, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(404, detail="Session not found.")
+    await revoke_family(db, session.family_id, "session_revoked", revoked_by=user.id)
+    await _audit(
+        db, user.id, "session_revoked", {"session_id": str(session_id)},
+        ip="", mandant_id=user.mandant_id,
+    )
+    await db.commit()
+
+
+@router.delete("/sessions", response_model=dict)
+async def revoke_other_sessions(
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Revoke every session except the one making this request."""
+    current = await current_family_id(db, request)
+    count = await revoke_user_sessions(
+        db, user.id, "sessions_revoked_all",
+        revoked_by=user.id, except_family=current,
+    )
+    await _audit(
+        db, user.id, "sessions_revoked_all", {"count": count},
+        ip="", mandant_id=user.mandant_id,
+    )
+    await db.commit()
+    return {"revoked": count}
+
+
+@router.get("/users/{user_id}/sessions", response_model=list[SessionOut])
+async def admin_list_sessions(
+    user_id: uuid.UUID,
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+) -> list[SessionOut]:
+    rows = (
+        await db.execute(
+            select(Session)
+            .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+            .order_by(Session.created_at.desc())
+        )
+    ).scalars().all()
+    return [
+        SessionOut(
+            id=row.id,
+            created_at=row.created_at,
+            last_seen_at=row.last_seen_at,
+            expires_at=row.expires_at,
+            revoked_at=row.revoked_at,
+            label=row.label,
+            user_agent=row.user_agent,
+        )
+        for row in rows
+    ]
+
+
+@router.delete("/users/{user_id}/sessions", response_model=dict)
+async def admin_revoke_sessions(
+    user_id: uuid.UUID,
+    acting_user: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+) -> dict:
+    count = await revoke_user_sessions(
+        db, user_id, "admin_revoked_all", revoked_by=acting_user.id,
+    )
+    await _audit(
+        db, acting_user.id, "sessions_revoked_all",
+        {"target_user_id": str(user_id), "count": count},
+        mandant_id=acting_user.mandant_id,
+    )
+    await db.commit()
+    return {"revoked": count}
+
+
+@router.get("/mfa", response_model=MfaStatusOut)
+async def mfa_status(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MfaStatusOut:
+    mfa = await get_mfa(db, user.id)
+    return MfaStatusOut(
+        enabled=is_mfa_enabled(mfa),
+        methods=mfa_methods(mfa),
+        recovery_codes_remaining=len(mfa.recovery_codes_hash) if mfa else 0,
+        required=mfa_required_for_role(user.role),
+    )
+
+
+@router.post("/mfa/totp/setup", response_model=MfaSetupOut)
+async def mfa_totp_setup(
+    payload: MfaSetupRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MfaSetupOut:
+    if not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, detail="Current password is incorrect.")
+    secret = generate_totp_secret()
+    await set_totp_secret(db, user.id, secret)
+    uri = provisioning_uri(secret, user.username)
+    await _audit(
+        db, user.id, "mfa_setup_started", {"method": "totp"},
+        mandant_id=user.mandant_id,
+    )
+    await db.commit()
+    return MfaSetupOut(secret=secret, otpauth_uri=uri, qr_svg=mfa_qr_svg(uri))
+
+
+@router.post("/mfa/totp/verify", response_model=dict)
+async def mfa_totp_verify(
+    payload: MfaVerifyRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    mfa = await get_mfa(db, user.id)
+    secret = await get_totp_secret(mfa) if mfa else None
+    if mfa is None or not secret:
+        raise HTTPException(400, detail="Start MFA setup first.")
+    counter = verify_totp(secret, payload.code, mfa.last_totp_counter)
+    if counter is None:
+        raise HTTPException(400, detail="Invalid or already-used code.")
+    mfa.totp_enabled = True
+    mfa.last_totp_counter = counter
+    codes = generate_recovery_codes()
+    mfa.recovery_codes_hash = hash_recovery_codes(user.id, codes)
+    await _audit(
+        db, user.id, "mfa_enabled", {"method": "totp", "recovery_codes": len(codes)},
+        mandant_id=user.mandant_id,
+    )
+    await db.commit()
+    return {"recovery_codes": codes}
+
+
+@router.post("/mfa/recovery-codes", response_model=dict)
+async def mfa_regenerate_recovery_codes(
+    payload: MfaSetupRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    if not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, detail="Current password is incorrect.")
+    mfa = await get_mfa(db, user.id)
+    if mfa is None or not is_mfa_enabled(mfa):
+        raise HTTPException(400, detail="MFA is not enabled.")
+    codes = generate_recovery_codes()
+    mfa.recovery_codes_hash = hash_recovery_codes(user.id, codes)
+    await _audit(
+        db, user.id, "mfa_recovery_codes_regenerated",
+        {"count": len(codes)}, mandant_id=user.mandant_id,
+    )
+    await db.commit()
+    return {"recovery_codes": codes}
+
+
+@router.post("/mfa/disable", status_code=204)
+async def mfa_disable(
+    payload: MfaDisableRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    if not user.password_hash or not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, detail="Current password is incorrect.")
+    mfa = await get_mfa(db, user.id)
+    if mfa is None or not is_mfa_enabled(mfa):
+        raise HTTPException(400, detail="MFA is not enabled.")
+
+    valid = False
+    if mfa.totp_enabled:
+        secret = await get_totp_secret(mfa)
+        if secret and verify_totp(secret, payload.code, mfa.last_totp_counter) is not None:
+            valid = True
+    if not valid and mfa.recovery_codes_hash:
+        matched, remaining = consume_recovery_code(user.id, mfa.recovery_codes_hash, payload.code)
+        if matched:
+            mfa.recovery_codes_hash = remaining
+            valid = True
+    if not valid:
+        raise HTTPException(400, detail="Invalid code.")
+
+    mfa.totp_enabled = False
+    mfa.totp_secret_enc = None
+    mfa.recovery_codes_hash = []
+    mfa.webauthn_credentials = []
+    mfa.last_totp_counter = None
+    await _audit(
+        db, user.id, "mfa_disabled", {}, mandant_id=user.mandant_id,
+    )
+    await db.commit()
+
+
+@router.post("/mfa/challenge", response_model=TokenResponse)
+async def mfa_challenge(
+    request: Request,
+    response: Response,
+    payload: MfaChallengeRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Complete login with a TOTP or recovery code after the password step."""
+    try:
+        data = decode_mfa_token(payload.mfa_token)
+        user_id = uuid.UUID(data["sub"])
+    except Exception:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired MFA token.")
+
+    user = await load_user_by_id(db, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+    await adopt_mandate_of(
+        db, user.mandant_id,
+        is_holding_admin=user.holding_role == "holding_admin",
+        is_holding_viewer=user.holding_role == "holding_viewer",
+    )
+
+    mfa = await get_mfa(db, user.id)
+    if not is_mfa_enabled(mfa) or mfa is None:
+        raise HTTPException(400, detail="MFA is not enabled for this account.")
+
+    valid = False
+    if payload.method == "recovery":
+        matched, remaining = consume_recovery_code(user.id, mfa.recovery_codes_hash, payload.code)
+        if matched:
+            mfa.recovery_codes_hash = remaining
+            valid = True
+            await _audit(
+                db, user.id, "mfa_recovery_used", {}, mandant_id=user.mandant_id,
+            )
+    elif mfa.totp_enabled:
+        secret = await get_totp_secret(mfa)
+        counter = verify_totp(secret, payload.code, mfa.last_totp_counter) if secret else None
+        if counter is not None:
+            mfa.last_totp_counter = counter
+            valid = True
+
+    if not valid:
+        await _audit(
+            db, user.id, "mfa_challenge_failed", {"method": payload.method},
+            ip=_ip(request), mandant_id=user.mandant_id,
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code.")
+
+    return await _issue_session(db, user, request, response, audit_action="mfa_success")
 
 
 @router.get("/me/prefs")
@@ -365,6 +945,10 @@ async def create_user(
 ) -> User:
     if payload.role not in ROLE_HIERARCHY:
         raise HTTPException(400, detail=f"Invalid role. Choose from: {', '.join(ROLE_HIERARCHY)}")
+    try:
+        validate_password(payload.password, payload.username)
+    except PasswordPolicyError as exc:
+        raise HTTPException(400, detail=str(exc))
     # A holding_admin outranks any single mandate's own "admin" — their
     # bypass is already full cross-mandate RLS access, so gating this on
     # the literal base role alone would wrongly block them (holding_role
@@ -480,7 +1064,13 @@ async def update_user(
         user.is_active = payload.is_active
         changed_fields.append("is_active")
     if payload.password is not None:
+        try:
+            validate_password(payload.password, user.username)
+        except PasswordPolicyError as exc:
+            raise HTTPException(400, detail=str(exc))
         user.password_hash = hash_password(payload.password)
+        # An admin-initiated reset must be rotated by the user on next login.
+        user.must_change_password = True
         changed_fields.append("password")
     if payload.group is not None:
         # Add user to specified group
