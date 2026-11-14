@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 
 [[package]]
@@ -1258,14 +1258,14 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-api"
-version = "1.45.1"
+version = "1.45.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2e/02/6e0ae9cc61bd3169d401077b507b3ebc344745171e1051ab430be012dcd9/opentelemetry_api-1.45.1.tar.gz", hash = "sha256:aa38ed19bcc084ba42782a73255b3582283eced7ad6dddbd6695189e69adfb75", size = 72804, upload-time = "2026-10-06T17:32:58.133Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/14/cf3a6b6448849656e1e5f4e2101f3988dc6789724050096aba1bc5ccf592/opentelemetry_api-1.45.2.tar.gz", hash = "sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4", size = 73277, upload-time = "2026-10-29T17:29:37.888Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/41/f7dcf80b81ee8e71c1a2b59f14208bc723edbd89ed027a73b175abf6348e/opentelemetry_api-1.45.1-py3-none-any.whl", hash = "sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb", size = 60256, upload-time = "2026-10-06T17:32:33.506Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl", hash = "sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34", size = 60335, upload-time = "2026-10-29T17:29:06.955Z" },
 ]
 
 [[package]]
@@ -2108,100 +2108,6 @@ wheels = [
 ]
 
 [[package]]
-name = "wafpass-core"
-version = "1.1.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "python-hcl2" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "typer" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/bc/31bc146195b15b10c2016e6f97d1281bff563a4d291b31cdc655f36c7fec/wafpass_core-1.1.4.tar.gz", hash = "sha256:f795a5427fe7c0fdd42e967e2b48624573cc381f3be6f59959fbf9549b86c073", size = 741892, upload-time = "2026-10-13T08:43:30.524Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/db/d129298b4e06da0146a2cee8680789e7b9a656e86102c8bf455fe2e83230/wafpass_core-1.1.4-py3-none-any.whl", hash = "sha256:bd2e29419fcdfd8acd34ce61681476ae1f7207881c30ffb4d5484724a35d7c3a", size = 269230, upload-time = "2026-10-13T08:43:29.023Z" },
-]
-
-[[package]]
-name = "wafpass-server"
-version = "1.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "asyncpg" },
-    { name = "bcrypt" },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "python-dotenv" },
-    { name = "python-multipart" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "wafpass-core" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-]
-qr = [
-    { name = "segno" },
-]
-saml = [
-    { name = "python3-saml" },
-]
-secrets-aws = [
-    { name = "boto3" },
-]
-secrets-vault = [
-    { name = "hvac" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = ">=1.13" },
-    { name = "asyncpg", specifier = ">=0.29" },
-    { name = "bcrypt", specifier = ">=4.0" },
-    { name = "boto3", marker = "extra == 'secrets-aws'", specifier = ">=1.34" },
-    { name = "cryptography", specifier = ">=42.0" },
-    { name = "fastapi", specifier = ">=0.100" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26" },
-    { name = "hvac", marker = "extra == 'secrets-vault'", specifier = ">=2.1" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic-settings", specifier = ">=2.0" },
-    { name = "pyjwt", specifier = ">=2.8" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "python3-saml", marker = "extra == 'saml'", specifier = ">=1.16" },
-    { name = "segno", marker = "extra == 'qr'", specifier = ">=1.6" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23" },
-    { name = "wafpass-core", specifier = ">=1.0.0" },
-]
-provides-extras = ["saml", "qr", "secrets-aws", "secrets-vault", "dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest-asyncio", specifier = ">=1.4.0" }]
-
-[[package]]
 name = "watchfiles"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2398,6 +2304,100 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/a1/459ab96c5cda8a2164f594be6dc9f868de7971e6abafa696ea07534139a6/websockets-17.2-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:063508ce9e0db745f30ab52fc652f4e59efc79c2b74934b3837d5cdb974da620", size = 218612, upload-time = "2026-10-03T14:56:50.287Z" },
     { url = "https://files.pythonhosted.org/packages/8a/58/835cd51934d6780fa586f275b5d9901eead6d81569b4343b3767cdbaae4c/websockets-17.2-py3-none-any.whl", hash = "sha256:6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae", size = 211883, upload-time = "2026-10-03T14:56:51.898Z" },
 ]
+
+[[package]]
+name = "wombat-core"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-hcl2" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "typer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f9/f3/a41b17fad34db8759423d26c5b5de98a2802e92dda71db4fe26f06e451b2/wombat_core-1.2.0.tar.gz", hash = "sha256:e5c5b463cd108eb43ec4c607e7d66559afb040961f62e082d30022d37851bffa", size = 751243, upload-time = "2026-11-02T20:59:38.374Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/bc/c15c9e30d107f2bc02f7d6933bf590adfc40b72dd8aaf8c1412c48ed5d92/wombat_core-1.2.0-py3-none-any.whl", hash = "sha256:1f8dc98204347f0be3a09047fb932e7dd0afe3e369ae590e036d4d2dd2944b8a", size = 274566, upload-time = "2026-11-02T20:59:36.532Z" },
+]
+
+[[package]]
+name = "wombat-server"
+version = "1.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "asyncpg" },
+    { name = "bcrypt" },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "python-dotenv" },
+    { name = "python-multipart" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "wombat-core" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+]
+qr = [
+    { name = "segno" },
+]
+saml = [
+    { name = "python3-saml" },
+]
+secrets-aws = [
+    { name = "boto3" },
+]
+secrets-vault = [
+    { name = "hvac" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bcrypt", specifier = ">=4.0" },
+    { name = "boto3", marker = "extra == 'secrets-aws'", specifier = ">=1.34" },
+    { name = "cryptography", specifier = ">=42.0" },
+    { name = "fastapi", specifier = ">=0.100" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.26" },
+    { name = "hvac", marker = "extra == 'secrets-vault'", specifier = ">=2.1" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "pyjwt", specifier = ">=2.8" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "python3-saml", marker = "extra == 'saml'", specifier = ">=1.16" },
+    { name = "segno", marker = "extra == 'qr'", specifier = ">=1.6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23" },
+    { name = "wombat-core", specifier = ">=1.2.0" },
+]
+provides-extras = ["saml", "qr", "secrets-aws", "secrets-vault", "dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest-asyncio", specifier = ">=1.4.0" }]
 
 [[package]]
 name = "xmlsec"
